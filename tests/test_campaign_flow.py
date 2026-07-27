@@ -19,11 +19,17 @@ from langcampaign.storage import (
 
 def test_targeted_campaign_flow(tmp_path):
     expected_exports = {
+        "AssessmentScenario",
+        "CampaignRoadmap",
         "Campaign",
         "CampaignState",
         "CampaignType",
         "CoachingStyle",
         "CurriculumScope",
+        "MissionPlan",
+        "MissionPriority",
+        "PracticeActivity",
+        "RoadmapPhase",
         "calculate_readiness",
         "forecast_campaign",
         "load_campaign",
