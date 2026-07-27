@@ -23,13 +23,14 @@ Codex then:
 
 1. Conducts a short setup interview.
 2. Creates a Targeted or Flexible campaign.
-3. Generates an initial mission map.
-4. Runs the first learning mission.
-5. Conducts an independent mission check.
-6. Converts demonstrated performance into structured evidence.
-7. Updates readiness, any applicable forecast, and training progress.
-8. Saves resumable learner state.
-9. Displays a coaching-aware progress report.
+3. Shows a concise campaign brief and the next few priorities.
+4. Generates and persists a coarse internal campaign roadmap.
+5. Runs the first learning mission.
+6. Conducts an independent mission check.
+7. Converts demonstrated performance into structured evidence.
+8. Updates readiness, any applicable forecast, and training progress.
+9. Saves resumable learner state.
+10. Displays a coaching-aware progress report.
 
 In a later Codex session, the learner says:
 
@@ -159,6 +160,49 @@ Balanced curriculum and Supportive coaching remain defaults. Flexible is recomme
 
 The setup agent summarizes the proposed campaign and asks for confirmation before writing state.
 
+## Setup outputs and roadmap visibility
+
+After confirmation, setup creates two different views of the campaign.
+
+### Learner-facing campaign brief
+
+The learner sees a short orientation containing:
+
+- Confirmed goal and target date when applicable
+- Campaign type, curriculum scope, and coaching style
+- Expected study rhythm
+- A one-sentence explanation of the training approach
+- The next three priorities
+- The immediately actionable first mission
+- Estimated duration of that mission
+
+The brief does not display the entire projected curriculum. Its purpose is to confirm direction and make the next action obvious.
+
+### Internal campaign roadmap
+
+LangCampaign persists a coarse, adaptable planning scaffold containing:
+
+- Broad training phases
+- Capabilities expected within each phase
+- Critical dependencies
+- Approximate sequencing and time allocation
+- Planned review and simulation points
+- Assumptions that may require reassessment
+
+The roadmap stays deliberately vague. It is a planning hypothesis based on limited initial evidence, not a fixed promise or detailed lesson schedule.
+
+It is hidden during normal sessions to prevent information overload, but it is not secret. When the learner asks to **show my campaign roadmap**, LangCampaign provides a readable summary of phases, current position, major completed capabilities, and likely next areas. It does not expose hidden reasoning or internal chain-of-thought.
+
+LangCampaign always discloses material consequences even when the roadmap is not shown, including:
+
+- Target-date risk
+- Increased study requirements
+- Removal of missions because of time pressure
+- A recommendation to narrow the goal or revise the date
+- Major changes to the next priorities
+
+After assessments or campaign updates, the roadmap may reorder phases, expand weak capabilities, collapse material already demonstrated, add reviews, or change simulation timing. The learner-facing view remains focused on the next useful steps.
+
 ## Mission model
 
 A generated mission contains:
@@ -183,7 +227,7 @@ The planner rejects mission maps with duplicate identifiers, missing prerequisit
 
 ## Campaign planning
 
-The planner generates a small initial map rather than pretending to know the entire future curriculum. The first plan contains enough missions for the next meaningful phase and is extended as evidence accumulates.
+The planner generates a coarse internal roadmap and a detailed mission map for only the next meaningful phase rather than pretending to know the entire future curriculum. Later phases remain broad until evidence justifies generating their missions.
 
 Planning follows this order:
 
@@ -194,6 +238,8 @@ Planning follows this order:
 5. Apply curriculum scope.
 6. Fit the plan to available time and target date.
 7. Add mission checks, reviews, and campaign simulations.
+
+The planner then derives the learner-facing next three priorities from the active phase. These priorities must agree with the internal roadmap but omit speculative later-phase detail.
 
 Mission Focused suppresses most enrichment. Balanced includes transferable context. Foundational adds broader context only when it does not silently displace required campaign work.
 
@@ -276,7 +322,7 @@ Combines multiple demonstrated or developing missions into an unfamiliar scenari
 
 ### `langcampaign-progress`
 
-Renders mission readiness, forecast where applicable, training progress, strengths, limitations, due reviews, and next priority.
+Renders mission readiness, forecast where applicable, training progress, strengths, limitations, due reviews, and next priority. On explicit request, it also renders the learner-readable roadmap summary.
 
 ### `langcampaign-update`
 
@@ -382,14 +428,15 @@ The milestone is complete when:
 
 1. A learner can start a campaign in Codex using natural language.
 2. Setup creates a validated mission map and versioned learner state.
-3. Codex can run a complete teaching and independent-assessment session.
-4. Assessment evidence, not attendance, updates readiness.
-5. A fresh Codex session can resume without reconstructed chat context.
-6. Reviews are selected deterministically from persisted scheduling data.
-7. Progress and recovery actions follow the selected coaching style.
-8. Campaign changes preserve relevant evidence and explain their impact.
-9. Learner data is ignored by Git and written atomically.
-10. The health check proves the repository-local installation works.
-11. End-to-end fixtures cover both Flexible and Targeted campaigns.
-12. The README quick start describes commands that work in the repository.
-
+3. Setup shows a concise brief with three priorities and one actionable first mission.
+4. A coarse internal roadmap is persisted, adapts to evidence, and is hidden by default but revealable on request.
+5. Codex can run a complete teaching and independent-assessment session.
+6. Assessment evidence, not attendance, updates readiness.
+7. A fresh Codex session can resume without reconstructed chat context.
+8. Reviews are selected deterministically from persisted scheduling data.
+9. Progress and recovery actions follow the selected coaching style.
+10. Campaign changes preserve relevant evidence and explain their impact.
+11. Learner data is ignored by Git and written atomically.
+12. The health check proves the repository-local installation works.
+13. End-to-end fixtures cover both Flexible and Targeted campaigns.
+14. The README quick start describes commands that work in the repository.
