@@ -53,6 +53,7 @@ Each plan produces independently usable and tested software. Claude and other ad
 **Files:**
 - Create: `src/langcampaign/missions.py`
 - Create: `tests/__init__.py`
+- Create: `tests/fixtures.py`
 - Create: `tests/test_missions.py`
 
 **Interfaces:**
@@ -62,13 +63,12 @@ Each plan produces independently usable and tested software. Claude and other ad
 
 - [ ] **Step 1: Write failing tests for observable, linked mission plans**
 
-Create an empty `tests/__init__.py` so later plan tasks can import the exact
-fixture builders defined by earlier tasks.
+Create an empty `tests/__init__.py` and put reusable builders in
+`tests/fixtures.py` so tests never import implementation details from other
+test modules.
 
 ```python
-# tests/test_missions.py
-import pytest
-
+# tests/fixtures.py
 from langcampaign.missions import (
     AssessmentScenario,
     MissionPlan,
@@ -105,6 +105,14 @@ def delayed_arrival(**changes):
     }
     values.update(changes)
     return MissionPlan(**values)
+```
+
+```python
+# tests/test_missions.py
+import pytest
+
+from langcampaign.missions import AssessmentScenario, validate_mission_map
+from tests.fixtures import delayed_arrival
 
 
 def test_valid_mission_map_links_content_to_readiness_missions():
@@ -115,7 +123,6 @@ def test_valid_mission_map_links_content_to_readiness_missions():
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"capability": "Learn the future tense"}, "capability must describe an observable action"),
         ({"practice": ()}, "practice must not be empty"),
         (
             {"assessment": AssessmentScenario("Respond appropriately.", ())},
@@ -218,11 +225,6 @@ class MissionPlan:
             _require_non_empty_string(value, name)
         if not isinstance(self.priority, MissionPriority):
             raise ValueError("priority must be a MissionPriority")
-        if not any(token in self.capability.lower() for token in (
-            "ask", "answer", "complete", "explain", "follow", "notify",
-            "read", "respond", "understand", "write",
-        )):
-            raise ValueError("capability must describe an observable action")
         if not self.practice:
             raise ValueError("practice must not be empty")
         for values, name in (
@@ -282,7 +284,7 @@ Expected: existing 90 tests plus the new mission tests pass.
 - [ ] **Step 5: Commit mission content**
 
 ```bash
-git add src/langcampaign/missions.py tests/__init__.py tests/test_missions.py
+git add src/langcampaign/missions.py tests/__init__.py tests/fixtures.py tests/test_missions.py
 git commit -m "feat: add validated mission content"
 ```
 
@@ -292,27 +294,19 @@ git commit -m "feat: add validated mission content"
 
 **Files:**
 - Create: `src/langcampaign/roadmaps.py`
+- Modify: `tests/fixtures.py`
 - Create: `tests/test_roadmaps.py`
 
 **Interfaces:**
 - Consumes: `MissionPlan` identifiers and priorities from Task 1.
-- Produces: `RoadmapPhase`, `CampaignRoadmap`, `validate_roadmap(roadmap, plans)`, `next_priorities(roadmap, plans, count=3)`, and `render_roadmap_summary(roadmap, plans) -> str`.
+- Produces: `RoadmapPhase`, `CampaignRoadmap`, `validate_roadmap(roadmap, plans)`, `next_priority_ids(roadmap, plans, count=3)`, `next_priorities(roadmap, plans, count=3)`, and `render_roadmap_summary(roadmap, plans) -> str`.
 
 - [ ] **Step 1: Write failing roadmap validation and visibility tests**
 
 ```python
-# tests/test_roadmaps.py
-import pytest
-
+# tests/fixtures.py (append)
 from langcampaign.missions import MissionPriority
-from langcampaign.roadmaps import (
-    CampaignRoadmap,
-    RoadmapPhase,
-    next_priorities,
-    render_roadmap_summary,
-    validate_roadmap,
-)
-from tests.test_missions import delayed_arrival
+from langcampaign.roadmaps import CampaignRoadmap, RoadmapPhase
 
 
 def roadmap():
@@ -356,12 +350,32 @@ def plans():
             priority=MissionPriority.SUPPORTING,
         ),
     )
+```
+
+```python
+# tests/test_roadmaps.py
+import pytest
+
+from langcampaign.roadmaps import (
+    CampaignRoadmap,
+    RoadmapPhase,
+    next_priority_ids,
+    next_priorities,
+    render_roadmap_summary,
+    validate_roadmap,
+)
+from tests.fixtures import plans, roadmap
 
 
 def test_roadmap_is_valid_and_exposes_only_next_three_priorities():
     current = roadmap()
     current_plans = plans()
     validate_roadmap(current, current_plans)
+    assert next_priority_ids(current, current_plans) == (
+        "delayed-arrival",
+        "hotel-check-in",
+        "train-options",
+    )
     assert next_priorities(current, current_plans) == (
         "Explain a delayed arrival",
         "Complete a hotel check-in",
@@ -459,7 +473,7 @@ def validate_roadmap(
         raise ValueError("roadmap mission ids must be unique across phases")
 
 
-def next_priorities(
+def next_priority_ids(
     roadmap: CampaignRoadmap,
     plans: tuple[MissionPlan, ...],
     count: int = 3,
@@ -473,7 +487,16 @@ def next_priorities(
         MissionPriority.ENRICHMENT: 2,
     }
     candidates.sort(key=lambda item: (order[item.priority], active.mission_ids.index(item.id)))
-    return tuple(item.title for item in candidates[:count])
+    return tuple(item.id for item in candidates[:count])
+
+
+def next_priorities(
+    roadmap: CampaignRoadmap,
+    plans: tuple[MissionPlan, ...],
+    count: int = 3,
+) -> tuple[str, ...]:
+    by_id = {plan.id: plan for plan in plans}
+    return tuple(by_id[item].title for item in next_priority_ids(roadmap, plans, count))
 
 
 def render_roadmap_summary(
@@ -495,7 +518,7 @@ Expected: all mission and roadmap tests pass.
 - [ ] **Step 5: Commit the internal roadmap**
 
 ```bash
-git add src/langcampaign/roadmaps.py tests/test_roadmaps.py
+git add src/langcampaign/roadmaps.py tests/fixtures.py tests/test_roadmaps.py
 git commit -m "feat: add adaptive campaign roadmap"
 ```
 
@@ -522,8 +545,7 @@ Add to `tests/test_storage.py`:
 def test_version_three_state_round_trips_learner_content_and_roadmap(tmp_path):
     from langcampaign.missions import validate_mission_map
     from langcampaign.roadmaps import RoadmapPhase, validate_roadmap
-    from tests.test_missions import delayed_arrival
-    from tests.test_roadmaps import roadmap
+    from tests.fixtures import delayed_arrival, roadmap
 
     campaign = new_campaign("Handle hotel delays", "Spanish").with_missions(
         (Mission("delayed-arrival", "Explain a delayed arrival"),)
@@ -977,6 +999,7 @@ git commit -m "feat: add local learner campaign repository"
 - Create: `src/langcampaign/cli.py`
 - Create: `src/langcampaign/__main__.py`
 - Modify: `src/langcampaign/__init__.py`
+- Modify: `tests/fixtures.py`
 - Create: `tests/test_cli.py`
 
 **Interfaces:**
@@ -987,14 +1010,7 @@ git commit -m "feat: add local learner campaign repository"
 - [ ] **Step 1: Write failing command-envelope and rollback tests**
 
 ```python
-# tests/test_cli.py
-import json
-import subprocess
-import sys
-
-from langcampaign.cli import run_command
-
-
+# tests/fixtures.py (append)
 def setup_payload():
     return {
         "learner_id": "Qasim Ali",
@@ -1041,6 +1057,16 @@ def setup_payload():
             "assumptions": ["The learner reads Latin script."],
         },
     }
+```
+
+```python
+# tests/test_cli.py
+import json
+import subprocess
+import sys
+
+from langcampaign.cli import run_command
+from tests.fixtures import setup_payload
 
 
 def test_setup_writes_valid_state_and_returns_next_priorities(tmp_path):
@@ -1051,6 +1077,24 @@ def test_setup_writes_valid_state_and_returns_next_priorities(tmp_path):
     assert result.data["next_priorities"] == ["Explain a delayed arrival"]
     assert result.data["first_mission_id"] == "delayed-arrival"
     assert list(tmp_path.glob("qasim-ali/*/state.json"))
+
+
+def test_setup_first_mission_uses_active_phase_priority_not_payload_order(tmp_path):
+    payload = setup_payload()
+    supporting = payload["mission_plans"][0]
+    supporting["priority"] = "supporting"
+    critical = {**supporting, "id": "hotel-check-in", "title": "Check in"}
+    critical["priority"] = "critical"
+    payload["campaign"]["missions"].append(
+        {"id": "hotel-check-in", "title": "Check in", "weight": 1.0}
+    )
+    payload["mission_plans"].append(critical)
+    payload["roadmap"]["phases"][0]["mission_ids"].append("hotel-check-in")
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.success is True
+    assert result.data["first_mission_id"] == "hotel-check-in"
 
 
 def test_invalid_setup_leaves_no_partial_state(tmp_path):
@@ -1105,7 +1149,7 @@ from .models import (
     CurriculumScope,
     Mission,
 )
-from .roadmaps import next_priorities, render_roadmap_summary, validate_roadmap
+from .roadmaps import next_priorities, next_priority_ids, render_roadmap_summary, validate_roadmap
 from .storage import CampaignState
 
 
@@ -1160,12 +1204,15 @@ def _setup(payload: dict, learners_root: Path) -> dict:
         roadmap=roadmap,
     )
     save_learner_campaign(learners_root, state)
+    priority_ids = next_priority_ids(roadmap, mission_plans)
+    if not priority_ids:
+        raise ValueError("active roadmap phase has no missions")
     priorities = next_priorities(roadmap, mission_plans)
     return {
         "learner_id": state.learner_id,
         "campaign_id": campaign.id,
         "next_priorities": list(priorities),
-        "first_mission_id": mission_plans[0].id,
+        "first_mission_id": priority_ids[0],
     }
 ```
 
@@ -1292,7 +1339,7 @@ Expected JSON:
 Export `CommandResult` and `run_command` from `src/langcampaign/__init__.py`.
 
 ```bash
-git add src/langcampaign/cli.py src/langcampaign/__main__.py src/langcampaign/__init__.py tests/test_cli.py
+git add src/langcampaign/cli.py src/langcampaign/__main__.py src/langcampaign/__init__.py tests/fixtures.py tests/test_cli.py
 git commit -m "feat: add agent command boundary"
 ```
 
@@ -1313,7 +1360,7 @@ git commit -m "feat: add agent command boundary"
 ```python
 # tests/test_content_state_flow.py
 from langcampaign.cli import run_command
-from tests.test_cli import setup_payload
+from tests.fixtures import setup_payload
 
 
 def test_setup_persists_hidden_roadmap_and_fresh_process_can_reveal_summary(tmp_path):
