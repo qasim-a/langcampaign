@@ -25,13 +25,23 @@ def progress_bar(percent: int, width: int = 20) -> str:
 def render_progress(report: ProgressReport) -> str:
     style = report.campaign.settings.coaching_style
     heading = {
-        CoachingStyle.SUPPORTIVE: "🌟 Great work — mission complete!",
+        CoachingStyle.SUPPORTIVE: "🌟 Great work — keep building your mission!",
         CoachingStyle.DIRECT: "MISSION REPORT",
         CoachingStyle.BOOT_CAMP: "MISSION CHECK",
     }[style]
+    training_percent = (
+        round(100 * report.completed_minutes / report.planned_minutes)
+        if report.planned_minutes
+        else 0
+    )
     lines = [
         heading,
         f"Readiness [{progress_bar(report.readiness.percent)}] {report.readiness.percent}%",
+        (
+            f"Training completed [{progress_bar(training_percent)}] "
+            f"{report.completed_minutes}/{report.planned_minutes} min "
+            f"({training_percent}%)"
+        ),
     ]
     if report.forecast is not None:
         lines.append(
