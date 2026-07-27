@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from langcampaign.assessment import (
     AssessmentEvidence,
     calculate_readiness,
@@ -46,3 +48,28 @@ def test_cefr_summary_is_affirmative_and_modality_specific():
         "You demonstrated approximately A2 written interaction "
         "across 4 independent assessments."
     )
+
+
+@pytest.mark.parametrize("score", (0, 100))
+def test_assessment_evidence_accepts_integer_score_boundaries(score):
+    evidence = AssessmentEvidence(
+        mission_id="chat",
+        score=score,
+        independent=True,
+        modality="written_interaction",
+        assessed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+    )
+
+    assert evidence.score == score
+
+
+@pytest.mark.parametrize("score", (-1, 101, 50.5, True))
+def test_assessment_evidence_rejects_scores_outside_integer_percentage_range(score):
+    with pytest.raises(ValueError, match="score must be an integer from 0 through 100"):
+        AssessmentEvidence(
+            mission_id="chat",
+            score=score,
+            independent=True,
+            modality="written_interaction",
+            assessed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+        )

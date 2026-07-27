@@ -16,6 +16,12 @@ class AssessmentEvidence:
     assessed_at: datetime
     cefr: str | None = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.score, bool) or not isinstance(self.score, int):
+            raise ValueError("score must be an integer from 0 through 100")
+        if not 0 <= self.score <= 100:
+            raise ValueError("score must be an integer from 0 through 100")
+
 
 @dataclass(frozen=True)
 class ReadinessResult:
