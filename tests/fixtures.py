@@ -4,6 +4,7 @@ from langcampaign.missions import (
     MissionPriority,
     PracticeActivity,
 )
+from langcampaign.roadmaps import CampaignRoadmap, RoadmapPhase
 
 
 def delayed_arrival(**changes):
@@ -33,3 +34,46 @@ def delayed_arrival(**changes):
     }
     values.update(changes)
     return MissionPlan(**values)
+
+
+def roadmap():
+    return CampaignRoadmap(
+        phases=(
+            RoadmapPhase(
+                id="core-transactions",
+                title="Core transactions",
+                capability_summary="Handle routine hotel and transport exchanges.",
+                mission_ids=("delayed-arrival", "hotel-check-in", "train-options"),
+                planned_review_after=True,
+                planned_simulation_after=False,
+            ),
+            RoadmapPhase(
+                id="problem-recovery",
+                title="Problem recovery",
+                capability_summary="Correct misunderstandings and request alternatives.",
+                mission_ids=(),
+                planned_review_after=True,
+                planned_simulation_after=True,
+            ),
+        ),
+        active_phase_id="core-transactions",
+        assumptions=("The learner can read Latin script.",),
+    )
+
+
+def plans():
+    return (
+        delayed_arrival(),
+        delayed_arrival(
+            id="hotel-check-in",
+            title="Complete a hotel check-in",
+            capability="Complete a hotel check-in and answer a reservation question.",
+            priority=MissionPriority.CRITICAL,
+        ),
+        delayed_arrival(
+            id="train-options",
+            title="Ask for another train",
+            capability="Ask for another train and understand the departure time.",
+            priority=MissionPriority.SUPPORTING,
+        ),
+    )
