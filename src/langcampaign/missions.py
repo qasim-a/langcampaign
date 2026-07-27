@@ -6,6 +6,11 @@ from enum import StrEnum
 from .models import _require_non_empty_string
 
 
+def _require_tuple(value: object, name: str) -> None:
+    if type(value) is not tuple:
+        raise ValueError(f"{name} must be a tuple")
+
+
 class MissionPriority(StrEnum):
     CRITICAL = "critical"
     SUPPORTING = "supporting"
@@ -29,6 +34,7 @@ class AssessmentScenario:
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.prompt, "assessment prompt")
+        _require_tuple(self.success_criteria, "success_criteria")
         if not self.success_criteria:
             raise ValueError("success_criteria must not be empty")
         for criterion in self.success_criteria:
@@ -61,8 +67,23 @@ class MissionPlan:
             _require_non_empty_string(value, name)
         if not isinstance(self.priority, MissionPriority):
             raise ValueError("priority must be a MissionPriority")
+        if not isinstance(self.assessment, AssessmentScenario):
+            raise ValueError("assessment must be an AssessmentScenario")
+        for values, name in (
+            (self.prerequisite_ids, "prerequisite_ids"),
+            (self.target_vocabulary, "target_vocabulary"),
+            (self.target_structures, "target_structures"),
+            (self.register_notes, "register_notes"),
+            (self.cultural_context, "cultural_context"),
+            (self.practice, "practice"),
+            (self.common_failure_patterns, "common_failure_patterns"),
+        ):
+            _require_tuple(values, name)
         if not self.practice:
             raise ValueError("practice must not be empty")
+        for activity in self.practice:
+            if not isinstance(activity, PracticeActivity):
+                raise ValueError("practice activity must be a PracticeActivity")
         for values, name in (
             (self.prerequisite_ids, "prerequisite id"),
             (self.target_vocabulary, "target vocabulary"),

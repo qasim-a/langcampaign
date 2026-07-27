@@ -30,6 +30,41 @@ def test_mission_content_rejects_unassessable_content(
         build_invalid_content()
 
 
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"prerequisite_ids": []}, "prerequisite_ids must be a tuple"),
+        ({"target_vocabulary": []}, "target_vocabulary must be a tuple"),
+        ({"target_structures": []}, "target_structures must be a tuple"),
+        ({"register_notes": []}, "register_notes must be a tuple"),
+        ({"cultural_context": []}, "cultural_context must be a tuple"),
+        ({"practice": []}, "practice must be a tuple"),
+        (
+            {"common_failure_patterns": []},
+            "common_failure_patterns must be a tuple",
+        ),
+    ],
+)
+def test_mission_plan_rejects_mutable_content_collections(changes, message):
+    with pytest.raises(ValueError, match=message):
+        delayed_arrival(**changes)
+
+
+def test_assessment_scenario_rejects_mutable_success_criteria():
+    with pytest.raises(ValueError, match="success_criteria must be a tuple"):
+        AssessmentScenario("Respond appropriately.", ["Responds politely."])
+
+
+def test_mission_plan_rejects_mutable_practice_entries():
+    with pytest.raises(ValueError, match="practice activity must be a PracticeActivity"):
+        delayed_arrival(practice=([],))
+
+
+def test_mission_plan_rejects_mutable_assessment_values():
+    with pytest.raises(ValueError, match="assessment must be an AssessmentScenario"):
+        delayed_arrival(assessment=[])
+
+
 def test_mission_map_requires_exactly_one_plan_per_readiness_mission():
     with pytest.raises(ValueError, match="mission plan ids must match readiness mission ids"):
         validate_mission_map(
