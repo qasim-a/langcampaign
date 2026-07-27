@@ -27,6 +27,8 @@ def revise_campaign(campaign: Campaign, change: CampaignChange) -> CampaignRevis
     new_type = change.campaign_type or old.campaign_type
     new_date = change.target_date if change.target_date is not None else old.target_date
     structural = new_type is not old.campaign_type
+    if new_type is CampaignType.FLEXIBLE and change.target_date is not None:
+        raise ValueError("target_date is only valid for targeted campaigns")
     if structural and not change.confirm_restructure:
         raise ValueError("confirmation_required: campaign type change restructures planning")
     if new_type is CampaignType.TARGETED and new_date is None:
@@ -56,6 +58,14 @@ def revise_campaign(campaign: Campaign, change: CampaignChange) -> CampaignRevis
         settings=updated_settings,
     )
     effects = []
+    if campaign.goal != updated.goal:
+        effects.append("Goal changed; mission priorities will be recalculated.")
+    if old.target_date != updated_settings.target_date:
+        effects.append("Target date changed; planning timeline will be recalculated.")
+    if old.expected_minutes_per_week != updated_settings.expected_minutes_per_week:
+        effects.append("Expected weekly time changed; planning workload will be recalculated.")
+    if old.minimum_minutes_per_week != updated_settings.minimum_minutes_per_week:
+        effects.append("Minimum weekly time changed; planning workload will be recalculated.")
     if old.coaching_style is not updated_settings.coaching_style:
         effects.append("Coaching style changed; assessment standards are unchanged.")
     if old.curriculum_scope is not updated_settings.curriculum_scope:
