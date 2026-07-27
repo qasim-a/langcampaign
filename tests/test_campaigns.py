@@ -88,3 +88,36 @@ def test_flexible_campaign_rejects_target_date_change():
             original,
             CampaignChange(target_date=date(2026, 10, 1)),
         )
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    (
+        (CampaignChange(goal="  "), "goal must be non-empty"),
+        (
+            CampaignChange(expected_minutes_per_week=True),
+            "expected_minutes_per_week must be a nonnegative integer",
+        ),
+        (
+            CampaignChange(minimum_minutes_per_week=-1),
+            "minimum_minutes_per_week must be a nonnegative integer",
+        ),
+        (
+            CampaignChange(campaign_type=False),
+            "campaign_type must be a CampaignType",
+        ),
+        (
+            CampaignChange(curriculum_scope=""),
+            "curriculum_scope must be a CurriculumScope",
+        ),
+        (
+            CampaignChange(coaching_style=False),
+            "coaching_style must be a CoachingStyle",
+        ),
+    ),
+)
+def test_revision_uses_domain_record_validation(change, message):
+    original = new_campaign("Read posts", "Japanese")
+
+    with pytest.raises(ValueError, match=message):
+        revise_campaign(original, change)

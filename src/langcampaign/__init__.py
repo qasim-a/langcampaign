@@ -9,19 +9,30 @@ from .models import (
     new_campaign,
 )
 from .rendering import render_progress
-from .storage import load_campaign, save_campaign
+from .storage import (
+    CampaignState,
+    CampaignStorageError,
+    load_campaign,
+    load_campaign_state,
+    save_campaign,
+    save_campaign_state,
+)
 
 __all__ = [
     "Campaign",
+    "CampaignState",
+    "CampaignStorageError",
     "CampaignType",
     "CoachingStyle",
     "CurriculumScope",
     "calculate_readiness",
     "forecast_campaign",
     "load_campaign",
+    "load_campaign_state",
     "new_campaign",
     "render_progress",
     "revise_campaign",
     "save_campaign",
+    "save_campaign_state",
     "summarize_cefr",
 ]

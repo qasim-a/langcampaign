@@ -73,3 +73,14 @@ def test_assessment_evidence_rejects_scores_outside_integer_percentage_range(sco
             modality="written_interaction",
             assessed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
         )
+
+
+def test_assessment_evidence_requires_timezone_aware_timestamp():
+    with pytest.raises(ValueError, match="assessed_at must be timezone-aware"):
+        AssessmentEvidence(
+            mission_id="chat",
+            score=75,
+            independent=True,
+            modality="written_interaction",
+            assessed_at=datetime(2026, 7, 27),
+        )

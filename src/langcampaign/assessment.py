@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from .models import Campaign
+from .models import (
+    Campaign,
+    _require_aware_datetime,
+    _require_non_empty_string,
+)
 
 
 CEFR_ORDER = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
@@ -17,10 +21,13 @@ class AssessmentEvidence:
     cefr: str | None = None
 
     def __post_init__(self) -> None:
+        _require_non_empty_string(self.mission_id, "mission_id")
+        _require_non_empty_string(self.modality, "modality")
         if isinstance(self.score, bool) or not isinstance(self.score, int):
             raise ValueError("score must be an integer from 0 through 100")
         if not 0 <= self.score <= 100:
             raise ValueError("score must be an integer from 0 through 100")
+        _require_aware_datetime(self.assessed_at, "assessed_at")
 
 
 @dataclass(frozen=True)

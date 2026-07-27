@@ -24,9 +24,16 @@ class CampaignRevision:
 
 def revise_campaign(campaign: Campaign, change: CampaignChange) -> CampaignRevision:
     old = campaign.settings
-    new_type = change.campaign_type or old.campaign_type
+    new_type = (
+        change.campaign_type
+        if change.campaign_type is not None
+        else old.campaign_type
+    )
     new_date = change.target_date if change.target_date is not None else old.target_date
-    structural = new_type is not old.campaign_type
+    structural = (
+        isinstance(new_type, CampaignType)
+        and new_type is not old.campaign_type
+    )
     if new_type is CampaignType.FLEXIBLE and change.target_date is not None:
         raise ValueError("target_date is only valid for targeted campaigns")
     if structural and not change.confirm_restructure:
@@ -49,12 +56,27 @@ def revise_campaign(campaign: Campaign, change: CampaignChange) -> CampaignRevis
             if change.minimum_minutes_per_week is not None
             else old.minimum_minutes_per_week
         ),
-        curriculum_scope=change.curriculum_scope or old.curriculum_scope,
-        coaching_style=change.coaching_style or old.coaching_style,
+        curriculum_scope=(
+            change.curriculum_scope
+            if change.curriculum_scope is not None
+            else old.curriculum_scope
+        ),
+        coaching_style=(
+            change.coaching_style
+            if change.coaching_style is not None
+            else old.coaching_style
+        ),
     )
+    new_goal = campaign.goal
+    if change.goal is not None:
+        new_goal = (
+            change.goal.strip()
+            if isinstance(change.goal, str)
+            else change.goal
+        )
     updated = replace(
         campaign,
-        goal=change.goal.strip() if change.goal is not None else campaign.goal,
+        goal=new_goal,
         settings=updated_settings,
     )
     effects = []

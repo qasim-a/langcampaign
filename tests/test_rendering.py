@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from langcampaign.assessment import ReadinessResult
-from langcampaign.forecasting import Forecast
+from langcampaign.forecasting import Forecast, RecoveryAction
 from langcampaign.models import CoachingStyle, new_campaign
 from langcampaign.rendering import ProgressReport, render_progress
 
@@ -72,3 +72,52 @@ def test_report_renders_zero_planned_training_minutes_without_division_error():
     output = render_progress(report)
 
     assert "Training completed [░░░░░░░░░░░░░░░░░░░░] 0/0 min (0%)" in output
+
+
+def test_supportive_at_risk_report_renders_labeled_time_recovery_action():
+    report = replace(
+        report_for(CoachingStyle.SUPPORTIVE),
+        forecast=Forecast(
+            70,
+            "at_risk",
+            100,
+            (
+                RecoveryAction(
+                    "Add 34 study minutes per week to reach 80 readiness by "
+                    "the target date.",
+                    34,
+                ),
+            ),
+        ),
+    )
+
+    output = render_progress(report)
+
+    assert (
+        "⚠️ Recovery action: Add 34 study minutes per week to reach 80 "
+        "readiness by the target date."
+    ) in output
+
+
+def test_boot_camp_at_risk_report_renders_labeled_goal_or_date_recovery():
+    report = replace(
+        report_for(CoachingStyle.BOOT_CAMP),
+        forecast=Forecast(
+            20,
+            "at_risk",
+            0,
+            (
+                RecoveryAction(
+                    "Narrow the goal or revise the target date because the "
+                    "required recovery pace is not plausible."
+                ),
+            ),
+        ),
+    )
+
+    output = render_progress(report)
+
+    assert (
+        "⚠️ RECOVERY ACTION: Narrow the goal or revise the target date "
+        "because the required recovery pace is not plausible."
+    ) in output

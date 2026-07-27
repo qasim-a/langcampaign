@@ -48,6 +48,16 @@ def render_progress(report: ProgressReport) -> str:
             f"Forecast: {report.forecast.projected_readiness}% "
             f"({report.forecast.status.replace('_', ' ')})"
         )
+        if report.forecast.status == "at_risk":
+            recovery_label = {
+                CoachingStyle.SUPPORTIVE: "⚠️ Recovery action:",
+                CoachingStyle.DIRECT: "Recovery action:",
+                CoachingStyle.BOOT_CAMP: "⚠️ RECOVERY ACTION:",
+            }[style]
+            lines.extend(
+                f"{recovery_label} {action.message}"
+                for action in report.forecast.recovery_actions
+            )
     if style is CoachingStyle.SUPPORTIVE:
         lines.extend(f"✅ Demonstrated: {item}" for item in report.demonstrated)
         lines.extend(f"🟡 Developing: {item}" for item in report.developing)
