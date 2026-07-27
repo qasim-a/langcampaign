@@ -164,3 +164,15 @@ def test_campaign_rejects_mutable_or_invalid_mission_collections():
             CampaignSettings(),
             missions=("not a mission",),
         )
+
+
+def test_campaign_rejects_mutable_or_invalid_settings():
+    mutable_settings = {"campaign_type": "flexible"}
+
+    with pytest.raises(ValueError, match="settings must be a CampaignSettings"):
+        Campaign(
+            "campaign",
+            "Text friends",
+            "Spanish",
+            mutable_settings,
+        )

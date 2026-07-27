@@ -125,6 +125,8 @@ class Campaign:
         _require_non_empty_string(self.goal, "goal")
         _require_non_empty_string(self.target_language, "target_language")
         _require_aware_datetime(self.created_at, "created_at")
+        if not isinstance(self.settings, CampaignSettings):
+            raise ValueError("settings must be a CampaignSettings")
         if type(self.missions) is not tuple:
             raise ValueError("missions must be a tuple")
         if any(not isinstance(mission, Mission) for mission in self.missions):
