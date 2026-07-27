@@ -125,6 +125,10 @@ class Campaign:
         _require_non_empty_string(self.goal, "goal")
         _require_non_empty_string(self.target_language, "target_language")
         _require_aware_datetime(self.created_at, "created_at")
+        if type(self.missions) is not tuple:
+            raise ValueError("missions must be a tuple")
+        if any(not isinstance(mission, Mission) for mission in self.missions):
+            raise ValueError("missions must contain Mission records")
         mission_ids = tuple(mission.id for mission in self.missions)
         if len(mission_ids) != len(set(mission_ids)):
             raise ValueError("mission ids must be unique within a campaign")

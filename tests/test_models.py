@@ -142,3 +142,25 @@ def test_campaign_rejects_duplicate_mission_ids():
                 Mission("chat", "Handle replies"),
             )
         )
+
+
+def test_campaign_rejects_mutable_or_invalid_mission_collections():
+    mutable_missions = [Mission("chat", "Casual chat")]
+
+    with pytest.raises(ValueError, match="missions must be a tuple"):
+        Campaign(
+            "campaign",
+            "Text friends",
+            "Spanish",
+            CampaignSettings(),
+            missions=mutable_missions,
+        )
+
+    with pytest.raises(ValueError, match="missions must contain Mission records"):
+        Campaign(
+            "campaign",
+            "Text friends",
+            "Spanish",
+            CampaignSettings(),
+            missions=("not a mission",),
+        )
