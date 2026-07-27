@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
+from math import ceil
 
 from .models import Campaign, CampaignType
 
@@ -32,21 +33,34 @@ def forecast_campaign(
         raise ValueError("targeted campaign is missing target_date")
 
     actual_weekly = round(minutes_studied * 7 / max(elapsed_days, 1))
-    planned_weekly = campaign.settings.expected_minutes_per_week
     remaining_weeks = max((campaign.settings.target_date - today).days / 7, 0)
     projected_gain = round(actual_weekly * remaining_weeks * 15 / 100)
     projected = min(100, readiness + projected_gain)
     status = "on_track" if projected >= 80 else "at_risk"
     actions: tuple[RecoveryAction, ...] = ()
     if status == "at_risk":
-        additional = max(planned_weekly - actual_weekly, 0)
-        actions = (
-            RecoveryAction(
-                f"Add {additional} study minutes per week to restore the planned pace.",
-                additional,
-            ),
-            RecoveryAction(
-                "Narrow optional context before removing mission-critical work."
-            ),
-        )
+        if remaining_weeks:
+            required_weekly = ceil(
+                (80 - readiness) * 100 / (remaining_weeks * 15)
+            )
+            additional = required_weekly - actual_weekly
+            actions = (
+                RecoveryAction(
+                    f"Add {additional} study minutes per week to reach 80 readiness by the target date.",
+                    additional,
+                ),
+                RecoveryAction(
+                    "Narrow optional context before removing mission-critical work."
+                ),
+            )
+        else:
+            actions = (
+                RecoveryAction(
+                    "Narrow the goal or revise the target date because no time remains for "
+                    "a meaningful time recovery."
+                ),
+                RecoveryAction(
+                    "Narrow optional context before removing mission-critical work."
+                ),
+            )
     return Forecast(projected, status, actual_weekly, actions)
