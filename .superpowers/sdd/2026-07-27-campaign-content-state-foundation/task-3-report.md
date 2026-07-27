@@ -46,3 +46,25 @@ expected failure: a `Campaign` accepted a caller-owned mutable missions list.
 `Campaign` now enforces its declared tuple mission boundary and requires each
 contained value to be a `Mission`, preventing mutable mission collections from
 entering frozen campaign state.
+
+## Review follow-up: immutable campaign settings
+
+Fix commit: `6120ddeeb6cf4694d4adb5570ff27ad4dcd78b69`
+
+### RED evidence
+
+After adding `test_campaign_rejects_mutable_or_invalid_settings`,
+`python -m pytest tests/test_models.py -v` had 24 passing tests and one
+expected failure: a `Campaign` accepted a caller-owned mutable settings
+dictionary.
+
+### GREEN evidence
+
+- `python -m pytest tests/test_models.py tests/test_storage.py
+  tests/test_campaign_flow.py -v`: 54 passed.
+- `python -m pytest -v`: 126 passed.
+- `git diff --check`: passed with no whitespace errors.
+
+`Campaign` now requires `CampaignSettings`, so mutable or arbitrary settings
+objects cannot enter frozen campaign state; existing version-1, version-2, and
+version-3 loads continue to construct and validate that record.
