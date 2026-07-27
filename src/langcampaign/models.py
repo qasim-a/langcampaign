@@ -59,6 +59,11 @@ class Campaign:
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
+    def with_missions(self, missions: tuple[Mission, ...]) -> "Campaign":
+        from dataclasses import replace
+
+        return replace(self, missions=missions)
+
 
 def new_campaign(
     goal: str,
