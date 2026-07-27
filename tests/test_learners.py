@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import langcampaign.learners as learners
 from langcampaign.learners import (
     campaign_state_path,
     list_learner_campaigns,
@@ -10,7 +12,11 @@ from langcampaign.learners import (
     select_campaign,
 )
 from langcampaign.models import new_campaign
-from langcampaign.storage import CampaignState, CampaignStorageError
+from langcampaign.storage import (
+    CampaignState,
+    CampaignStorageError,
+    save_campaign_state,
+)
 
 
 def state(goal: str = "Text friends", learner: str = "Qasim Ali") -> CampaignState:
@@ -99,3 +105,91 @@ def test_saving_rejects_a_broken_link_at_the_campaign_directory(tmp_path):
 
     with pytest.raises(ValueError, match="campaign directory is not a directory"):
         save_learner_campaign(tmp_path, stored)
+
+
+def test_repository_rejects_a_state_with_a_different_learner_identity(tmp_path):
+    stored = state()
+    path = save_learner_campaign(tmp_path, stored)
+    save_campaign_state(path, replace(stored, learner_id="Other Learner"))
+
+    with pytest.raises(
+        CampaignStorageError,
+        match="stored learner_id does not match directory",
+    ):
+        list_learner_campaigns(tmp_path, "Qasim Ali")
+    with pytest.raises(
+        CampaignStorageError,
+        match="stored learner_id does not match directory",
+    ):
+        select_campaign(tmp_path, "Qasim Ali")
+
+
+def test_repository_rejects_a_state_with_a_different_campaign_identity(tmp_path):
+    stored = state()
+    path = save_learner_campaign(tmp_path, stored)
+    mismatched = replace(
+        stored,
+        campaign=replace(stored.campaign, id="other-campaign"),
+    )
+    save_campaign_state(path, mismatched)
+
+    with pytest.raises(
+        CampaignStorageError,
+        match="stored campaign id does not match directory",
+    ):
+        list_learner_campaigns(tmp_path, "Qasim Ali")
+    with pytest.raises(
+        CampaignStorageError,
+        match="stored campaign id does not match directory",
+    ):
+        select_campaign(tmp_path, "Qasim Ali")
+    with pytest.raises(
+        CampaignStorageError,
+        match="stored campaign id does not match directory",
+    ):
+        select_campaign(tmp_path, "Qasim Ali", stored.campaign.id)
+
+
+def test_listing_does_not_follow_a_state_file_swapped_to_a_symlink(
+    monkeypatch,
+    tmp_path,
+):
+    stored = state()
+    path = save_learner_campaign(tmp_path, stored)
+    outside = tmp_path / "outside-state.json"
+    save_campaign_state(outside, replace(stored, campaign=replace(stored.campaign, goal="Outside")))
+    original_open = learners._open_regular_file
+
+    def swap_then_open(directory_fd, name):
+        if name == "state.json":
+            path.unlink()
+            path.symlink_to(outside)
+        return original_open(directory_fd, name)
+
+    monkeypatch.setattr(learners, "_open_regular_file", swap_then_open)
+
+    assert list_learner_campaigns(tmp_path, "Qasim Ali") == ()
+
+
+def test_saving_does_not_write_outside_after_a_campaign_directory_swap(
+    monkeypatch,
+    tmp_path,
+):
+    stored = state()
+    path = campaign_state_path(tmp_path, stored.learner_id, stored.campaign.id)
+    outside = tmp_path / "outside"
+    detached = tmp_path / "detached"
+    outside.mkdir()
+    original_save = learners.save_campaign_state_at
+
+    def swap_then_save(directory_fd, campaign_state):
+        path.parent.rename(detached)
+        path.parent.symlink_to(outside, target_is_directory=True)
+        original_save(directory_fd, campaign_state)
+
+    monkeypatch.setattr(learners, "save_campaign_state_at", swap_then_save)
+
+    save_learner_campaign(tmp_path, stored)
+
+    assert not (outside / "state.json").exists()
+    assert (detached / "state.json").exists()

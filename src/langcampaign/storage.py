@@ -1,9 +1,11 @@
 import json
 import os
+import secrets
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import TextIO
 
 from .assessment import AssessmentEvidence
 from .missions import (
@@ -296,7 +298,11 @@ def save_campaign(path: Path, campaign: Campaign) -> None:
 
 
 def save_campaign_state(path: Path, state: CampaignState) -> None:
-    payload = {
+    _write_payload(path, _campaign_state_payload(state))
+
+
+def _campaign_state_payload(state: CampaignState) -> dict:
+    return {
         "schema_version": CAMPAIGN_CONTENT_SCHEMA_VERSION,
         "campaign": campaign_to_dict(state.campaign),
         "assessment_evidence": [
@@ -307,12 +313,51 @@ def save_campaign_state(path: Path, state: CampaignState) -> None:
         "mission_plans": [mission_plan_to_dict(item) for item in state.mission_plans],
         "roadmap": roadmap_to_dict(state.roadmap) if state.roadmap else None,
     }
-    _write_payload(path, payload)
 
 
-def _read_envelope(path: Path) -> dict:
+def save_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
+    """Atomically save state inside an already-open directory descriptor."""
+    temporary = f".state.json.{secrets.token_hex(16)}.tmp"
+    descriptor: int | None = None
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            json.dump(_campaign_state_payload(state), stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary,
+            "state.json",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary = ""
+        if os.name == "posix":
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                # Some POSIX filesystems do not support directory fsync.
+                pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
+def _read_envelope_text(text: str) -> dict:
+    try:
+        payload = json.loads(text)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise CampaignStorageError(
             "invalid campaign storage: malformed JSON"
@@ -359,8 +404,27 @@ def _read_envelope(path: Path) -> dict:
     return payload
 
 
-def load_campaign_state(path: Path) -> CampaignState:
-    payload = _read_envelope(path)
+def _read_envelope(path: Path) -> dict:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise CampaignStorageError(
+            "invalid campaign storage: malformed JSON"
+        ) from error
+    return _read_envelope_text(text)
+
+
+def _read_envelope_file(stream: TextIO) -> dict:
+    try:
+        text = stream.read()
+    except UnicodeDecodeError as error:
+        raise CampaignStorageError(
+            "invalid campaign storage: malformed JSON"
+        ) from error
+    return _read_envelope_text(text)
+
+
+def _campaign_state_from_payload(payload: dict) -> CampaignState:
     try:
         campaign = campaign_from_dict(payload["campaign"])
         evidence = (
@@ -392,6 +456,14 @@ def load_campaign_state(path: Path) -> CampaignState:
         raise CampaignStorageError(
             "invalid campaign storage: invalid campaign payload"
         ) from error
+
+
+def load_campaign_state(path: Path) -> CampaignState:
+    return _campaign_state_from_payload(_read_envelope(path))
+
+
+def load_campaign_state_file(stream: TextIO) -> CampaignState:
+    return _campaign_state_from_payload(_read_envelope_file(stream))
 
 
 def load_campaign(path: Path) -> Campaign:

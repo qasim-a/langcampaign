@@ -1,8 +1,15 @@
+import errno
+import os
 import re
 import stat
 from pathlib import Path
 
-from .storage import CampaignState, load_campaign_state, save_campaign_state
+from .storage import (
+    CampaignState,
+    CampaignStorageError,
+    load_campaign_state_file,
+    save_campaign_state_at,
+)
 
 
 def normalize_learner_id(value: str) -> str:
@@ -22,21 +29,80 @@ def _safe_id(value: str, name: str) -> str:
     return value
 
 
-def _file_type(path: Path) -> int | None:
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+_MISSING_OR_UNSAFE = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
+
+
+def _open_directory(directory_fd: int, name: str) -> int | None:
     try:
-        return path.lstat().st_mode
+        return os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
+    except OSError as error:
+        if error.errno in _MISSING_OR_UNSAFE:
+            return None
+        raise
+
+
+def _open_regular_file(directory_fd: int, name: str) -> int | None:
+    try:
+        descriptor = os.open(name, _FILE_FLAGS, dir_fd=directory_fd)
+    except OSError as error:
+        if error.errno in _MISSING_OR_UNSAFE:
+            return None
+        raise
+    if stat.S_ISREG(os.fstat(descriptor).st_mode):
+        return descriptor
+    os.close(descriptor)
+    return None
+
+
+def _open_root(root: Path, *, create: bool) -> int | None:
+    root = Path(root)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    try:
+        return os.open(root, _DIRECTORY_FLAGS)
     except FileNotFoundError:
         return None
 
 
-def _is_directory(path: Path) -> bool:
-    mode = _file_type(path)
-    return mode is not None and stat.S_ISDIR(mode)
+def _open_or_create_directory(parent_fd: int, name: str, error: str) -> int:
+    try:
+        os.mkdir(name, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    descriptor = _open_directory(parent_fd, name)
+    if descriptor is None:
+        raise ValueError(error)
+    return descriptor
 
 
-def _is_regular_file(path: Path) -> bool:
-    mode = _file_type(path)
-    return mode is not None and stat.S_ISREG(mode)
+def _load_state(
+    directory_fd: int, canonical_learner_id: str, campaign_id: str
+) -> CampaignState | None:
+    descriptor = _open_regular_file(directory_fd, "state.json")
+    if descriptor is None:
+        return None
+    try:
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = None
+            state = load_campaign_state_file(stream)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if normalize_learner_id(state.learner_id) != canonical_learner_id:
+        raise CampaignStorageError(
+            "invalid campaign storage: stored learner_id does not match directory"
+        )
+    if state.campaign.id != campaign_id:
+        raise CampaignStorageError(
+            "invalid campaign storage: stored campaign id does not match directory"
+        )
+    return state
 
 
 def campaign_state_path(root: Path, learner_id: str, campaign_id: str) -> Path:
@@ -50,40 +116,63 @@ def campaign_state_path(root: Path, learner_id: str, campaign_id: str) -> Path:
 
 def save_learner_campaign(root: Path, state: CampaignState) -> Path:
     path = campaign_state_path(root, state.learner_id, state.campaign.id)
-    learner_directory = path.parent.parent
-    campaign_directory = path.parent
-    if (
-        _file_type(learner_directory) is not None
-        and not _is_directory(learner_directory)
-    ):
-        raise ValueError("learner directory is not a directory")
-    if (
-        _file_type(campaign_directory) is not None
-        and not _is_directory(campaign_directory)
-    ):
-        raise ValueError("campaign directory is not a directory")
-    campaign_directory.mkdir(parents=True, exist_ok=True)
-    save_campaign_state(path, state)
+    learner_id = normalize_learner_id(state.learner_id)
+    root_fd = _open_root(root, create=True)
+    if root_fd is None:
+        raise ValueError("learner root does not exist")
+    try:
+        learner_fd = _open_or_create_directory(
+            root_fd, learner_id, "learner directory is not a directory"
+        )
+        try:
+            campaign_fd = _open_or_create_directory(
+                learner_fd,
+                state.campaign.id,
+                "campaign directory is not a directory",
+            )
+            try:
+                save_campaign_state_at(campaign_fd, state)
+            finally:
+                os.close(campaign_fd)
+        finally:
+            os.close(learner_fd)
+    finally:
+        os.close(root_fd)
     return path
 
 
 def _campaign_states(root: Path, learner_id: str) -> tuple[CampaignState, ...]:
-    directory = Path(root) / normalize_learner_id(learner_id)
-    if not _is_directory(directory):
+    canonical_learner_id = normalize_learner_id(learner_id)
+    root_fd = _open_root(root, create=False)
+    if root_fd is None:
         return ()
-    states = []
-    for entry in sorted(directory.iterdir(), key=lambda candidate: candidate.name):
+    try:
+        learner_fd = _open_directory(root_fd, canonical_learner_id)
+        if learner_fd is None:
+            return ()
         try:
-            _safe_id(entry.name, "campaign_id")
-        except ValueError:
-            continue
-        if not _is_directory(entry):
-            continue
-        state_path = entry / "state.json"
-        if not _is_regular_file(state_path):
-            continue
-        states.append(load_campaign_state(state_path))
-    return tuple(states)
+            states = []
+            for campaign_id in sorted(os.listdir(learner_fd)):
+                try:
+                    _safe_id(campaign_id, "campaign_id")
+                except ValueError:
+                    continue
+                campaign_fd = _open_directory(learner_fd, campaign_id)
+                if campaign_fd is None:
+                    continue
+                try:
+                    state = _load_state(
+                        campaign_fd, canonical_learner_id, campaign_id
+                    )
+                finally:
+                    os.close(campaign_fd)
+                if state is not None:
+                    states.append(state)
+            return tuple(states)
+        finally:
+            os.close(learner_fd)
+    finally:
+        os.close(root_fd)
 
 
 def list_learner_campaigns(root: Path, learner_id: str) -> tuple[tuple[str, str], ...]:
@@ -97,10 +186,32 @@ def select_campaign(
     root: Path, learner_id: str, campaign_id: str | None = None
 ) -> CampaignState:
     if campaign_id is not None:
-        path = campaign_state_path(root, learner_id, campaign_id)
-        if not _is_directory(path.parent) or not _is_regular_file(path):
+        canonical_learner_id = normalize_learner_id(learner_id)
+        campaign_id = _safe_id(campaign_id, "campaign_id")
+        root_fd = _open_root(root, create=False)
+        if root_fd is None:
             raise ValueError("campaign does not exist")
-        return load_campaign_state(path)
+        try:
+            learner_fd = _open_directory(root_fd, canonical_learner_id)
+            if learner_fd is None:
+                raise ValueError("campaign does not exist")
+            try:
+                campaign_fd = _open_directory(learner_fd, campaign_id)
+                if campaign_fd is None:
+                    raise ValueError("campaign does not exist")
+                try:
+                    state = _load_state(
+                        campaign_fd, canonical_learner_id, campaign_id
+                    )
+                finally:
+                    os.close(campaign_fd)
+            finally:
+                os.close(learner_fd)
+        finally:
+            os.close(root_fd)
+        if state is None:
+            raise ValueError("campaign does not exist")
+        return state
     available = _campaign_states(root, learner_id)
     if not available:
         raise ValueError("learner has no campaigns")
