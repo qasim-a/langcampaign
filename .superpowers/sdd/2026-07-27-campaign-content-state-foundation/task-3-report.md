@@ -25,3 +25,24 @@ were added failed because `MissionPlan`, `MissionPriority`, `PracticeActivity`,
 The storage boundary now writes schema version 3, reads versions 1 and 2 with
 default content fields, validates tuple-backed campaign content, and converts
 malformed JSON payload type, enum, and shape failures to `CampaignStorageError`.
+
+## Review follow-up: immutable campaign missions
+
+Fix commit: `6bcf66fa8cc846fab98a257f05067aa5a19b9ad4`
+
+### RED evidence
+
+After adding `test_campaign_rejects_mutable_or_invalid_mission_collections`,
+`python -m pytest tests/test_models.py -v` had 23 passing tests and one
+expected failure: a `Campaign` accepted a caller-owned mutable missions list.
+
+### GREEN evidence
+
+- `python -m pytest tests/test_models.py tests/test_storage.py
+  tests/test_campaign_flow.py -v`: 53 passed.
+- `python -m pytest -v`: 125 passed.
+- `git diff --check`: passed with no whitespace errors.
+
+`Campaign` now enforces its declared tuple mission boundary and requires each
+contained value to be a `Mission`, preventing mutable mission collections from
+entering frozen campaign state.
