@@ -51,3 +51,30 @@ no-follow `openat` operations. State writes remain atomic, use a temporary file
 and replacement within the held campaign directory descriptor, and fsync the
 file and directory where supported. Deterministic tests verify swaps cannot
 redirect either reads or writes outside the opened repository tree.
+
+## Re-review fix: invalid stored learner identity error contract
+
+Fix commit: `b0b9f8b`
+
+### Reviewer finding and RED evidence
+
+A syntactically invalid but non-empty stored learner ID such as `"../../"`
+was accepted by `CampaignState` and parsed from storage. Repository identity
+validation then leaked `ValueError` from `normalize_learner_id` through
+listing, implicit selection, and explicit selection rather than preserving the
+storage corruption contract.
+
+The regression test initially failed with the leaked `ValueError` for all
+three access paths.
+
+### Implementation and verification
+
+`_load_state()` now catches normalization failures for the stored learner ID
+only and raises `CampaignStorageError` with context that the stored identity is
+invalid. Expected `ValueError` results for missing or ambiguous campaign
+selection remain unchanged.
+
+- `python -m pytest tests/test_learners.py tests/test_storage.py -v` — 46
+  passed.
+- `python -m pytest -v` — 144 passed.
+- `git diff --check` — passed with no whitespace errors.
