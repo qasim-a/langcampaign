@@ -226,3 +226,88 @@ d22d2b90ee8f68aaa73d60432522691fcde629c1 fix: narrow command error boundary
 
 The source-checkout module smoke remains an environment/setup caveat: use an
 editable installation or `PYTHONPATH=src`.
+
+## Review-fix round 2
+
+### Root cause
+
+`main()` caught `ValueError` across both JSON decoding and `run_command()`.
+After the explicit `CommandInputError` command boundary had handled expected
+user faults, that broad entry-point catch still converted an arbitrary handler
+`ValueError` into a failure envelope and exit code 2.
+
+### RED
+
+Command:
+
+```text
+python -m pytest tests/test_cli.py -v
+```
+
+Output before the fix:
+
+```text
+collected 19 items
+FAILED tests/test_cli.py::test_main_does_not_hide_a_handler_value_error
+Failed: DID NOT RAISE <class 'ValueError'>
+Captured stdout: {"success": false, "error": "handler programmer fault"}
+========================= 1 failed, 18 passed in 0.23s =========================
+```
+
+### GREEN
+
+`main()` now catches only `json.JSONDecodeError`. A non-object decoded JSON
+value explicitly constructs the stable failure envelope; valid objects proceed
+to `run_command()` outside the parsing catch, so arbitrary handler
+`ValueError`s propagate.
+
+Command:
+
+```text
+python -m pytest tests/test_cli.py -v
+```
+
+Output:
+
+```text
+collected 19 items
+============================== 19 passed in 0.27s ===============================
+```
+
+### Verification
+
+```text
+python -m pytest tests/test_cli.py tests/test_learners.py tests/test_storage.py -v
+```
+
+```text
+collected 65 items
+============================== 65 passed in 0.31s ===============================
+```
+
+```text
+python -m pytest -v
+```
+
+```text
+collected 163 items
+============================= 163 passed in 0.32s ==============================
+```
+
+```text
+PYTHONPATH=src python -m langcampaign list-campaigns --learners-root learners --learner-id smoke-test
+```
+
+Output:
+
+```json
+{"success": true, "data": {"campaigns": []}}
+```
+
+`git diff --check` completed with no output and exit code 0.
+
+### Commit
+
+```text
+fb368671959b165708cc31d80fa4db6a77de15d6 fix: preserve command handler faults
+```
