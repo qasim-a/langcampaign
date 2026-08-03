@@ -17,7 +17,7 @@ Output:
 
 ```text
 collected 1 item
-tests/test_content_state_flow.py::test_setup_persists_hidden_roadmap_and_fresh_process_can_reveal_summary PASSED
+tests/test_content_state_flow.py::test_setup_persists_hidden_roadmap_and_subsequent_command_can_reveal_summary PASSED
 ============================== 1 passed in 0.03s ===============================
 ```
 
@@ -80,3 +80,27 @@ dae22b899d0bbcd0cfe0f0be1c0a2f4122806014 docs: describe campaign content foundat
 
 None. The first editable-install attempt could not resolve PyPI dependencies
 inside the sandbox; the approved network-enabled retry succeeded.
+
+## Review fix round 1
+
+The acceptance test and this report now describe a subsequent command
+invocation, rather than a fresh process: the test calls the public command
+boundary repeatedly in one interpreter. Each command still reloads persisted
+state through the public learner-selection path.
+
+README Current status now distinguishes the retained internal engine from the
+approved learner-facing lean MVP. It records the planned short defaulted setup,
+fixed concise presentation, small-batch calibrated missions, no-hints evidence
+checks, simple adaptation, and paused/resumable transitions for new goals.
+Installable Codex setup and teaching workflows remain explicitly future work.
+
+### Verification
+
+```text
+python -m pytest tests/test_content_state_flow.py -v
+python -m pytest -v
+git diff --check
+```
+
+All commands completed successfully; the acceptance test passed and the full
+suite contained 164 passing tests.

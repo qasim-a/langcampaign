@@ -2,7 +2,7 @@ from langcampaign.cli import run_command
 from tests.fixtures import setup_payload
 
 
-def test_setup_persists_hidden_roadmap_and_fresh_process_can_reveal_summary(tmp_path):
+def test_setup_persists_hidden_roadmap_and_subsequent_command_can_reveal_summary(tmp_path):
     created = run_command("setup", setup_payload(), tmp_path)
     assert created.success is True
 

@@ -243,7 +243,8 @@ coarse internal roadmap, keeps learner state under `learners/`, and exposes a
 structured command boundary for upcoming Codex skills. The roadmap remains out
 of normal session output but can be summarized when a learner asks to see it.
 
-LangCampaign currently provides the tested, platform-neutral campaign engine for:
+The retained internal, platform-neutral engine is tested for capabilities such
+as:
 
 - Targeted and Flexible campaign state
 - Editable goals, schedules, curriculum scope, and coaching style
@@ -252,6 +253,13 @@ LangCampaign currently provides the tested, platform-neutral campaign engine for
 - Coaching-aware text progress reports
 - Resumable campaign and assessment state
 
-The next layer is the end-user agent experience: mission generation, interactive teaching sessions, and automatic review scheduling. Codex teaching and setup skills are planned but are not yet operational.
+The approved learner-facing lean MVP is the next layer: short setup with
+defaults, a fixed concise style with colored status emojis and a compact
+progress bar, small-batch missions with embedded calibration, no-hints checks
+that record evidence, and simple adaptation. New goals will use paused and
+resumable campaign transitions rather than in-place editing. Installable Codex
+setup and teaching workflows are future work and are not yet operational.
 
-LangCampaign is not an accredited language-testing body. Its readiness and CEFR reports are learning tools based on demonstrated campaign performance.
+LangCampaign is not an accredited language-testing body. The internal engine's
+readiness and CEFR reports are learning tools based on demonstrated campaign
+performance.
