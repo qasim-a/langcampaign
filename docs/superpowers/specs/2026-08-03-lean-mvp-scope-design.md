@@ -1,7 +1,25 @@
 # LangCampaign Lean MVP Scope Design
 
 **Date:** 2026-08-03
-**Status:** Proposed for implementation planning
+**Status:** Approved
+
+## Delivery sequence
+
+The scope is deliberately split into independently reviewable plans rather
+than one large implementation plan:
+
+1. Complete the existing campaign-content foundation plan: Task 6, whole-branch
+   review, verification, and integration.
+2. Campaign lifecycle and fast setup: fixed defaults, prior-knowledge context,
+   active/paused/completed state, and resumable campaign transitions.
+3. Lean mission runtime: small-batch generation, guided practice, no-hints
+   checks, evidence capture, simple difficulty adjustment, and compact progress.
+4. Codex delivery and evaluation: installable Codex workflow, end-to-end learner
+   fixtures, latency checks, and product hardening.
+
+Each post-foundation subsystem receives its own implementation plan after the
+foundation API is finalized. This prevents downstream plans from depending on
+interfaces that whole-branch review may still change.
 
 ## Objective
 
