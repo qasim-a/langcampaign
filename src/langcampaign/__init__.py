@@ -1,5 +1,6 @@
 from .assessment import calculate_readiness, summarize_cefr
 from .campaigns import revise_campaign
+from .cli import CommandResult, run_command
 from .forecasting import forecast_campaign
 from .missions import (
     AssessmentScenario,
@@ -27,6 +28,7 @@ from .storage import (
 
 __all__ = [
     "Campaign",
+    "CommandResult",
     "CampaignRoadmap",
     "CampaignState",
     "CampaignStorageError",
@@ -45,6 +47,7 @@ __all__ = [
     "new_campaign",
     "render_progress",
     "revise_campaign",
+    "run_command",
     "save_campaign",
     "save_campaign_state",
     "summarize_cefr",

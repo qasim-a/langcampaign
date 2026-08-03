@@ -77,3 +77,60 @@ def plans():
             priority=MissionPriority.SUPPORTING,
         ),
     )
+
+
+def setup_payload():
+    return {
+        "learner_id": "Qasim Ali",
+        "campaign": {
+            "goal": "Handle a delayed hotel arrival",
+            "target_language": "Spanish",
+            "campaign_type": "flexible",
+            "missions": [
+                {
+                    "id": "delayed-arrival",
+                    "title": "Explain a delayed arrival",
+                    "weight": 1.0,
+                }
+            ],
+        },
+        "mission_plans": [
+            {
+                "id": "delayed-arrival",
+                "title": "Explain a delayed arrival",
+                "capability": "Notify a hotel of a late arrival and answer one follow-up.",
+                "rationale": "The learner will travel by train.",
+                "priority": "critical",
+                "prerequisite_ids": [],
+                "target_vocabulary": ["retraso"],
+                "target_structures": ["Voy a llegar a..."],
+                "register_notes": ["Use polite forms."],
+                "cultural_context": [],
+                "practice": [
+                    {"kind": "guided", "instructions": "Complete two messages."}
+                ],
+                "assessment": {
+                    "prompt": "Tell the hotel you will arrive late.",
+                    "success_criteria": [
+                        "Explains the delay.",
+                        "Provides a new time.",
+                    ],
+                },
+                "common_failure_patterns": ["Omits the new time."],
+            }
+        ],
+        "roadmap": {
+            "phases": [
+                {
+                    "id": "core",
+                    "title": "Core hotel exchanges",
+                    "capability_summary": "Handle routine hotel communication.",
+                    "mission_ids": ["delayed-arrival"],
+                    "planned_review_after": True,
+                    "planned_simulation_after": False,
+                }
+            ],
+            "active_phase_id": "core",
+            "assumptions": ["The learner reads Latin script."],
+        },
+    }
