@@ -94,7 +94,13 @@ def _load_state(
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    if normalize_learner_id(state.learner_id) != canonical_learner_id:
+    try:
+        stored_learner_id = normalize_learner_id(state.learner_id)
+    except ValueError as error:
+        raise CampaignStorageError(
+            "invalid campaign storage: stored learner_id is invalid"
+        ) from error
+    if stored_learner_id != canonical_learner_id:
         raise CampaignStorageError(
             "invalid campaign storage: stored learner_id does not match directory"
         )

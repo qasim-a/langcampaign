@@ -124,6 +124,25 @@ def test_repository_rejects_a_state_with_a_different_learner_identity(tmp_path):
         select_campaign(tmp_path, "Qasim Ali")
 
 
+def test_repository_wraps_an_invalid_stored_learner_id_as_storage_corruption(
+    tmp_path,
+):
+    stored = state()
+    path = save_learner_campaign(tmp_path, stored)
+    save_campaign_state(path, replace(stored, learner_id="../../"))
+
+    for select in (
+        lambda: list_learner_campaigns(tmp_path, "Qasim Ali"),
+        lambda: select_campaign(tmp_path, "Qasim Ali"),
+        lambda: select_campaign(tmp_path, "Qasim Ali", stored.campaign.id),
+    ):
+        with pytest.raises(
+            CampaignStorageError,
+            match="stored learner_id is invalid",
+        ):
+            select()
+
+
 def test_repository_rejects_a_state_with_a_different_campaign_identity(tmp_path):
     stored = state()
     path = save_learner_campaign(tmp_path, stored)
