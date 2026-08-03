@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import subprocess
 import sys
@@ -282,3 +283,17 @@ def test_module_entrypoint_returns_one_json_envelope_for_malformed_json(tmp_path
     assert envelope["success"] is False
     assert envelope["error"]
     assert completed.stdout.count("\n") == 1
+
+
+def test_main_does_not_hide_a_handler_value_error(tmp_path, monkeypatch):
+    def broken_handler(payload, learners_root):
+        del payload, learners_root
+        raise ValueError("handler programmer fault")
+
+    monkeypatch.setitem(cli.COMMANDS, "list-campaigns", broken_handler)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("{}"))
+
+    with pytest.raises(ValueError, match="handler programmer fault"):
+        cli.main(
+            ["list-campaigns", "--learners-root", str(tmp_path)]
+        )

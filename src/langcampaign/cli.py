@@ -292,14 +292,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         raw_input = sys.stdin.read()
         payload = json.loads(raw_input) if raw_input.strip() else {}
-        if not isinstance(payload, dict):
-            raise ValueError("command input must be a JSON object")
-        if arguments.learner_id is not None:
-            payload.setdefault("learner_id", arguments.learner_id)
-        if arguments.campaign_id is not None:
-            payload.setdefault("campaign_id", arguments.campaign_id)
-        result = run_command(arguments.command, payload, arguments.learners_root)
-    except (json.JSONDecodeError, ValueError) as error:
+    except json.JSONDecodeError as error:
         result = CommandResult(False, error=str(error))
+    else:
+        if not isinstance(payload, dict):
+            result = CommandResult(
+                False,
+                error="command input must be a JSON object",
+            )
+        else:
+            if arguments.learner_id is not None:
+                payload.setdefault("learner_id", arguments.learner_id)
+            if arguments.campaign_id is not None:
+                payload.setdefault("campaign_id", arguments.campaign_id)
+            result = run_command(
+                arguments.command,
+                payload,
+                arguments.learners_root,
+            )
     print(json.dumps(result.to_dict(), ensure_ascii=False))
     return 0 if result.success else 2
