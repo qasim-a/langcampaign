@@ -238,6 +238,11 @@ casual conversation and texting.
 
 ## 🚧 Current status
 
+The campaign-content foundation now validates generated mission maps, stores a
+coarse internal roadmap, keeps learner state under `learners/`, and exposes a
+structured command boundary for upcoming Codex skills. The roadmap remains out
+of normal session output but can be summarized when a learner asks to see it.
+
 LangCampaign currently provides the tested, platform-neutral campaign engine for:
 
 - Targeted and Flexible campaign state
@@ -247,6 +252,6 @@ LangCampaign currently provides the tested, platform-neutral campaign engine for
 - Coaching-aware text progress reports
 - Resumable campaign and assessment state
 
-The next layer is the end-user agent experience: installable Codex and Claude skills, mission generation, interactive teaching sessions, and automatic review scheduling.
+The next layer is the end-user agent experience: mission generation, interactive teaching sessions, and automatic review scheduling. Codex teaching and setup skills are planned but are not yet operational.
 
 LangCampaign is not an accredited language-testing body. Its readiness and CEFR reports are learning tools based on demonstrated campaign performance.
