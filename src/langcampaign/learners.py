@@ -462,8 +462,6 @@ def transition_campaign(
     states, index, _ = _read_lifecycle(root, canonical_learner_id)
     old_state = _active_state(states, index)
     resolved = _legacy_index_for(states, index)
-    if index is None:
-        _publish_index(root, canonical_learner_id, resolved)
     source_ids = set()
     target_ids = set()
     old_mission_ids = {mission.id for mission in old_state.campaign.missions}
@@ -479,6 +477,8 @@ def transition_campaign(
             raise CampaignSelectionError("target mission does not exist")
         source_ids.add(transfer.source_mission_id)
         target_ids.add(transfer.target_mission_id)
+    if index is None:
+        _publish_index(root, canonical_learner_id, resolved)
     target_by_source = {
         transfer.source_mission_id: transfer.target_mission_id for transfer in transfers
     }

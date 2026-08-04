@@ -413,3 +413,93 @@ def test_transition_rejects_caller_evidence_and_invalid_mapping_boundaries(tmp_p
         transition_campaign(
             tmp_path, "Qasim Ali", target, (EvidenceTransfer("missing", "target"),)
         )
+
+
+def test_invalid_legacy_transition_does_not_materialize_an_index(tmp_path):
+    source = CampaignState(
+        new_campaign("Text friends", "Spanish").with_missions((Mission("source", "Source"),)),
+        learner_id="Qasim Ali",
+    )
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions((Mission("target", "Target"),)),
+        learner_id="Qasim Ali",
+    )
+    save_learner_campaign(tmp_path, source, create_only=True)
+    index_path = tmp_path / "qasim-ali" / "index.json"
+
+    with pytest.raises(CampaignSelectionError, match="source mission"):
+        transition_campaign(
+            tmp_path, "Qasim Ali", target, (EvidenceTransfer("missing", "target"),)
+        )
+
+    assert not index_path.exists()
+
+
+def test_failed_legacy_transition_preserves_the_inferred_active_campaign(
+    tmp_path, monkeypatch
+):
+    source = CampaignState(
+        new_campaign("Text friends", "Spanish").with_missions((Mission("source", "Source"),)),
+        learner_id="Qasim Ali",
+    )
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions((Mission("target", "Target"),)),
+        learner_id="Qasim Ali",
+    )
+    save_learner_campaign(tmp_path, source, create_only=True)
+    original_publish = learners.save_learner_index_at
+    calls = 0
+
+    def fail_second_publication(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("final index publication failed")
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(learners, "save_learner_index_at", fail_second_publication)
+
+    with pytest.raises(OSError, match="final index publication failed"):
+        transition_campaign(
+            tmp_path, "Qasim Ali", target, (EvidenceTransfer("source", "target"),)
+        )
+
+    assert calls == 2
+    assert select_active_campaign(tmp_path, "Qasim Ali") == source
+    assert list_campaign_summaries(tmp_path, "Qasim Ali") == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )
+
+
+def test_failed_legacy_setup_publication_leaves_new_campaign_resumable(
+    tmp_path, monkeypatch
+):
+    source = state("Text friends")
+    target = state("Read posts")
+    save_learner_campaign(tmp_path, source, create_only=True)
+
+    original_publish = learners.save_learner_index_at
+    calls = 0
+
+    def fail_final_publication(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("index publication failed")
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        learners, "save_learner_index_at", fail_final_publication
+    )
+
+    with pytest.raises(OSError, match="index publication failed"):
+        create_and_activate_campaign(tmp_path, target)
+
+    assert calls == 2
+    assert select_active_campaign(tmp_path, "Qasim Ali") == source
+    assert select_campaign(tmp_path, "Qasim Ali", target.campaign.id) == target
+    assert list_campaign_summaries(tmp_path, "Qasim Ali") == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )

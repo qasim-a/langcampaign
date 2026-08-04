@@ -60,7 +60,9 @@ class CommandInputError(ValueError):
 
 def _input_error(error: ValueError) -> CommandInputError:
     return CommandInputError(
-        str(error).replace("MissionPriority", "mission priority")
+        str(error)
+        .replace("MissionPriority", "mission priority")
+        .replace("CampaignType", "campaign type")
     )
 
 
@@ -154,12 +156,14 @@ def _campaign_from_input(value: object) -> Campaign:
     raw_campaign = _object(value, "campaign")
     raw_date = _optional_string(raw_campaign, "target_date")
     inferred_type = "targeted" if raw_date is not None else "flexible"
-    campaign_type = CampaignType(raw_campaign.get("campaign_type", inferred_type))
     curriculum_scope = _optional_string(raw_campaign, "curriculum_scope", "balanced")
     coaching_style = _optional_string(raw_campaign, "coaching_style", "supportive")
     campaign_id = _optional_string(raw_campaign, "id")
     mission_inputs = _array(_field(raw_campaign, "missions"), "missions")
     try:
+        campaign_type = CampaignType(
+            raw_campaign.get("campaign_type", inferred_type)
+        )
         missions = []
         for value in mission_inputs:
             data = _object(value, "mission")
@@ -319,8 +323,18 @@ def _transfers_from_input(payload: dict) -> tuple[EvidenceTransfer, ...]:
     try:
         return tuple(
             EvidenceTransfer(
-                _string(_field(_object(value, "evidence transfer"), "source_mission_id"), "source_mission_id"),
-                _string(_field(_object(value, "evidence transfer"), "target_mission_id"), "target_mission_id"),
+                _string(
+                    _field(
+                        _object(value, "evidence transfer"), "source_mission_id"
+                    ),
+                    "source_mission_id",
+                ),
+                _string(
+                    _field(
+                        _object(value, "evidence transfer"), "target_mission_id"
+                    ),
+                    "target_mission_id",
+                ),
             )
             for value in values
         )
@@ -337,7 +351,9 @@ def _transition_campaign(payload: dict, learners_root: Path) -> dict:
     try:
         active = select_active_campaign(learners_root, new_state.learner_id)
         if active.campaign.id != source_campaign_id:
-            raise CommandInputError("source_campaign_id is not the active campaign")
+            raise CommandInputError(
+                "source_campaign_id is not the active campaign"
+            )
         persisted = transition_campaign(
             learners_root, new_state.learner_id, new_state, transfers
         )

@@ -184,7 +184,7 @@ development reference; they are not configuration choices or output promises
 in the approved lean learner journey.
 
 The campaign-content foundation adds validated mission maps, a coarse hidden
-roadmap, repository-local learner state, atomic persistence, and five JSON
+roadmap, repository-local learner state, atomic persistence, and nine JSON
 commands for future Codex workflows. Only an explicit `show-roadmap` command
 reveals a sanitized phase summary; normal setup, validation, and listing
 responses omit roadmap details and assumptions.

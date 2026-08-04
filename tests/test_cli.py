@@ -76,6 +76,18 @@ def test_setup_rejects_non_string_prior_knowledge(tmp_path, value):
     }
 
 
+def test_setup_returns_a_json_failure_for_an_invalid_legacy_campaign_type(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["campaign_type"] = "not-a-type"
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.to_dict() == {
+        "success": False,
+        "error": "'not-a-type' is not a valid campaign type",
+    }
+
+
 def test_setup_first_mission_uses_active_phase_priority_not_payload_order(tmp_path):
     payload = setup_payload()
     supporting = payload["mission_plans"][0]
@@ -409,6 +421,27 @@ def test_module_entrypoint_returns_json_envelope(tmp_path):
     envelope = json.loads(completed.stdout)
     assert completed.returncode == 0
     assert envelope["success"] is True
+    assert completed.stderr == ""
+
+
+def test_module_entrypoint_returns_one_json_envelope_for_invalid_campaign_type(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["campaign_type"] = "not-a-type"
+    completed = subprocess.run(
+        [sys.executable, "-m", "langcampaign", "setup", "--learners-root", str(tmp_path)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_module_environment(),
+    )
+
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout) == {
+        "success": False,
+        "error": "'not-a-type' is not a valid campaign type",
+    }
+    assert completed.stdout.count("\n") == 1
     assert completed.stderr == ""
 
 
