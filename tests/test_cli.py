@@ -788,3 +788,50 @@ def test_out_of_range_assessment_score_uses_typed_invalid_request(tmp_path):
 
     assert result.success is False
     assert result.error["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        {"learner_id": "###", "campaign_id": "campaign-a"},
+        {"learner_id": "Qasim Ali", "campaign_id": "../campaign-a"},
+    ),
+)
+def test_mission_status_malformed_repository_ids_emit_one_typed_json_envelope(
+    tmp_path, identity
+):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "langcampaign",
+            "mission-status",
+            "--learners-root",
+            str(tmp_path),
+        ],
+        input=json.dumps(identity),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_module_environment(),
+    )
+
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout)["error"]["code"] == "invalid_request"
+    assert completed.stdout.count("\n") == 1
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(("candidate_number", "correction_allowed"), ((1, True), (2, False)))
+def test_validate_content_preserves_actionable_rubric_weight_issue(
+    tmp_path, candidate_number, correction_allowed
+):
+    content = mission_content_payload(candidate_number)
+    content["rubric"][1]["weight"] = 40
+
+    result = run_command("validate-mission-content", {"content": content}, tmp_path)
+
+    assert result.success is True
+    assert result.data["valid"] is False
+    assert result.data["correction_allowed"] is correction_allowed
+    assert "weights must total 100" in result.data["issues"][0]["message"]

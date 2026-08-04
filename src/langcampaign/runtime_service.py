@@ -91,6 +91,8 @@ def _active(root, learner_id, campaign_id) -> CampaignState:
         state, lifecycle = select_campaign_lifecycle(root, learner_id, campaign_id)
     except CampaignSelectionError as error:
         raise MissionRuntimeError(RuntimeErrorCode.CAMPAIGN_NOT_FOUND, str(error)) from error
+    except LearnerRepositoryError as error:
+        raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, str(error)) from error
     except (CampaignStorageError, OSError) as error:
         raise MissionRuntimeError(RuntimeErrorCode.PERSISTENCE_FAILED, str(error)) from error
     if lifecycle is CampaignLifecycle.COMPLETED:

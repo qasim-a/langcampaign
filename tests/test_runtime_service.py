@@ -304,3 +304,16 @@ def test_runtime_revalidates_active_state_when_completion_wins_race(tmp_path, mo
 
     assert raised.value.code is RuntimeErrorCode.CAMPAIGN_COMPLETED
     assert select_campaign(tmp_path, "qasim", "campaign-a").revision == 0
+
+
+@pytest.mark.parametrize(
+    ("learner_id", "campaign_id"),
+    (("###", "campaign-a"), ("qasim", "../campaign-a")),
+)
+def test_read_status_translates_malformed_repository_ids_to_invalid_request(
+    tmp_path, learner_id, campaign_id
+):
+    with pytest.raises(MissionRuntimeError) as raised:
+        mission_status(tmp_path, learner_id, campaign_id)
+
+    assert raised.value.code is RuntimeErrorCode.INVALID_REQUEST

@@ -441,7 +441,21 @@ def _validate_mission_content(payload: dict, learners_root: Path) -> dict:
     raw = _field(payload, "content")
     try:
         content = _runtime_content_from_input(raw)
-    except (CommandInputError, MissionRuntimeError) as error:
+    except MissionRuntimeError as error:
+        candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
+        issues = error.issues or (
+            ContentIssue("content", "invalid_content", str(error)),
+        )
+        return {
+            "valid": False,
+            "content": {},
+            "correction_allowed": candidate == 1,
+            "issues": [
+                {"field": issue.field, "code": issue.code, "message": issue.message}
+                for issue in issues
+            ],
+        }
+    except CommandInputError as error:
         candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
         return {
             "valid": False, "content": {}, "correction_allowed": candidate == 1,
