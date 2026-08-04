@@ -18,8 +18,12 @@ from .models import (
 from .rendering import render_progress
 from .roadmaps import CampaignRoadmap, RoadmapPhase
 from .storage import (
+    CampaignLifecycle,
     CampaignState,
     CampaignStorageError,
+    LearnerCampaignIndex,
+    learner_index_from_dict,
+    learner_index_to_dict,
     load_campaign,
     load_campaign_state,
     save_campaign,
@@ -28,6 +32,7 @@ from .storage import (
 
 __all__ = [
     "Campaign",
+    "CampaignLifecycle",
     "CommandResult",
     "CampaignRoadmap",
     "CampaignState",
@@ -35,6 +40,7 @@ __all__ = [
     "CampaignType",
     "CoachingStyle",
     "CurriculumScope",
+    "LearnerCampaignIndex",
     "AssessmentScenario",
     "MissionPlan",
     "MissionPriority",
@@ -44,6 +50,8 @@ __all__ = [
     "forecast_campaign",
     "load_campaign",
     "load_campaign_state",
+    "learner_index_from_dict",
+    "learner_index_to_dict",
     "new_campaign",
     "render_progress",
     "revise_campaign",

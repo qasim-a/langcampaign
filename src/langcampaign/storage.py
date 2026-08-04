@@ -4,6 +4,7 @@ import secrets
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TextIO
 
@@ -31,15 +32,86 @@ from .roadmaps import CampaignRoadmap, RoadmapPhase, validate_roadmap
 SCHEMA_VERSION = 1
 CAMPAIGN_STATE_SCHEMA_VERSION = 2
 CAMPAIGN_CONTENT_SCHEMA_VERSION = 3
+CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION = 4
 SUPPORTED_SCHEMA_VERSIONS = (
     SCHEMA_VERSION,
     CAMPAIGN_STATE_SCHEMA_VERSION,
     CAMPAIGN_CONTENT_SCHEMA_VERSION,
+    CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
 )
 
 
 class CampaignStorageError(ValueError):
     """A stored campaign envelope or payload is invalid."""
+
+
+class CampaignLifecycle(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+
+
+@dataclass(frozen=True)
+class LearnerCampaignIndex:
+    active_campaign_id: str | None = None
+    completed_campaign_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.active_campaign_id is not None and type(self.active_campaign_id) is not str:
+            raise ValueError("active_campaign_id must be a string or None")
+        if type(self.completed_campaign_ids) is not tuple:
+            raise ValueError("completed_campaign_ids must be a tuple")
+        if any(type(campaign_id) is not str for campaign_id in self.completed_campaign_ids):
+            raise ValueError("completed_campaign_ids must contain strings")
+        if len(set(self.completed_campaign_ids)) != len(self.completed_campaign_ids):
+            raise ValueError("completed_campaign_ids must be unique")
+        if self.active_campaign_id in self.completed_campaign_ids:
+            raise ValueError("active campaign cannot be completed")
+
+    def lifecycle_for(self, campaign_id: str) -> CampaignLifecycle:
+        if campaign_id == self.active_campaign_id:
+            return CampaignLifecycle.ACTIVE
+        if campaign_id in self.completed_campaign_ids:
+            return CampaignLifecycle.COMPLETED
+        return CampaignLifecycle.PAUSED
+
+
+LEARNER_CAMPAIGN_INDEX_SCHEMA_VERSION = 1
+
+
+def learner_index_to_dict(index: LearnerCampaignIndex) -> dict:
+    if not isinstance(index, LearnerCampaignIndex):
+        raise ValueError("index must be a LearnerCampaignIndex")
+    return {
+        "schema_version": LEARNER_CAMPAIGN_INDEX_SCHEMA_VERSION,
+        "active_campaign_id": index.active_campaign_id,
+        "completed_campaign_ids": list(index.completed_campaign_ids),
+    }
+
+
+def learner_index_from_dict(data: dict) -> LearnerCampaignIndex:
+    if not isinstance(data, dict):
+        raise CampaignStorageError("invalid learner index: envelope must be an object")
+    if data.get("schema_version") != LEARNER_CAMPAIGN_INDEX_SCHEMA_VERSION or type(
+        data.get("schema_version")
+    ) is not int:
+        raise CampaignStorageError("invalid learner index: unsupported schema_version")
+    active_campaign_id = data.get("active_campaign_id")
+    completed_campaign_ids = data.get("completed_campaign_ids")
+    if active_campaign_id is not None and type(active_campaign_id) is not str:
+        raise CampaignStorageError(
+            "invalid learner index: active_campaign_id must be a string or null"
+        )
+    if not isinstance(completed_campaign_ids, list) or any(
+        type(campaign_id) is not str for campaign_id in completed_campaign_ids
+    ):
+        raise CampaignStorageError(
+            "invalid learner index: completed_campaign_ids must be a list of strings"
+        )
+    try:
+        return LearnerCampaignIndex(active_campaign_id, tuple(completed_campaign_ids))
+    except ValueError as error:
+        raise CampaignStorageError("invalid learner index") from error
 
 
 @dataclass(frozen=True)
@@ -49,6 +121,7 @@ class CampaignState:
     learner_id: str = "default"
     mission_plans: tuple[MissionPlan, ...] = ()
     roadmap: CampaignRoadmap | None = None
+    prior_knowledge: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.campaign, Campaign):
@@ -58,6 +131,8 @@ class CampaignState:
         if type(self.mission_plans) is not tuple:
             raise ValueError("mission_plans must be a tuple")
         _require_non_empty_string(self.learner_id, "learner_id")
+        if type(self.prior_knowledge) is not str:
+            raise ValueError("prior_knowledge must be a string")
         readiness_ids = tuple(mission.id for mission in self.campaign.missions)
         for item in self.assessment_evidence:
             if not isinstance(item, AssessmentEvidence):
@@ -303,7 +378,7 @@ def save_campaign_state(path: Path, state: CampaignState) -> None:
 
 def _campaign_state_payload(state: CampaignState) -> dict:
     return {
-        "schema_version": CAMPAIGN_CONTENT_SCHEMA_VERSION,
+        "schema_version": CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
         "campaign": campaign_to_dict(state.campaign),
         "assessment_evidence": [
             _assessment_evidence_to_dict(item)
@@ -312,6 +387,7 @@ def _campaign_state_payload(state: CampaignState) -> dict:
         "learner_id": state.learner_id,
         "mission_plans": [mission_plan_to_dict(item) for item in state.mission_plans],
         "roadmap": roadmap_to_dict(state.roadmap) if state.roadmap else None,
+        "prior_knowledge": state.prior_knowledge,
     }
 
 
@@ -419,13 +495,21 @@ def _read_envelope_text(text: str) -> dict:
             "invalid campaign storage: campaign must be an object"
         )
     if (
-        version in (CAMPAIGN_STATE_SCHEMA_VERSION, CAMPAIGN_CONTENT_SCHEMA_VERSION)
+        version
+        in (
+            CAMPAIGN_STATE_SCHEMA_VERSION,
+            CAMPAIGN_CONTENT_SCHEMA_VERSION,
+            CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+        )
         and not isinstance(payload.get("assessment_evidence"), list)
     ):
         raise CampaignStorageError(
             "invalid campaign storage: assessment_evidence must be a list"
         )
-    if version == CAMPAIGN_CONTENT_SCHEMA_VERSION:
+    if version in (
+        CAMPAIGN_CONTENT_SCHEMA_VERSION,
+        CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+    ):
         if not isinstance(payload.get("learner_id"), str):
             raise CampaignStorageError(
                 "invalid campaign storage: learner_id must be a string"
@@ -440,6 +524,12 @@ def _read_envelope_text(text: str) -> dict:
             raise CampaignStorageError(
                 "invalid campaign storage: roadmap must be an object or null"
             )
+    if version == CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION and not isinstance(
+        payload.get("prior_knowledge"), str
+    ):
+        raise CampaignStorageError(
+            "invalid campaign storage: prior_knowledge must be a string"
+        )
     return payload
 
 
@@ -472,10 +562,17 @@ def _campaign_state_from_payload(payload: dict) -> CampaignState:
                 for item in payload["assessment_evidence"]
             )
             if payload["schema_version"]
-            in (CAMPAIGN_STATE_SCHEMA_VERSION, CAMPAIGN_CONTENT_SCHEMA_VERSION)
+            in (
+                CAMPAIGN_STATE_SCHEMA_VERSION,
+                CAMPAIGN_CONTENT_SCHEMA_VERSION,
+                CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+            )
             else ()
         )
-        if payload["schema_version"] == CAMPAIGN_CONTENT_SCHEMA_VERSION:
+        if payload["schema_version"] in (
+            CAMPAIGN_CONTENT_SCHEMA_VERSION,
+            CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+        ):
             return CampaignState(
                 campaign=campaign,
                 assessment_evidence=evidence,
@@ -488,6 +585,12 @@ def _campaign_state_from_payload(payload: dict) -> CampaignState:
                     roadmap_from_dict(payload["roadmap"])
                     if payload["roadmap"] is not None
                     else None
+                ),
+                prior_knowledge=(
+                    payload["prior_knowledge"]
+                    if payload["schema_version"]
+                    == CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION
+                    else ""
                 ),
             )
         return CampaignState(campaign, evidence)
