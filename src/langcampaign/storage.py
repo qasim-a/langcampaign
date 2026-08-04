@@ -1,11 +1,20 @@
 import json
 import os
+import secrets
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import TextIO
 
 from .assessment import AssessmentEvidence
+from .missions import (
+    AssessmentScenario,
+    MissionPlan,
+    MissionPriority,
+    PracticeActivity,
+    validate_mission_map,
+)
 from .models import (
     Campaign,
     CampaignSettings,
@@ -14,12 +23,19 @@ from .models import (
     CurriculumScope,
     Mission,
     MissionStatus,
+    _require_non_empty_string,
 )
+from .roadmaps import CampaignRoadmap, RoadmapPhase, validate_roadmap
 
 
 SCHEMA_VERSION = 1
 CAMPAIGN_STATE_SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = (SCHEMA_VERSION, CAMPAIGN_STATE_SCHEMA_VERSION)
+CAMPAIGN_CONTENT_SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = (
+    SCHEMA_VERSION,
+    CAMPAIGN_STATE_SCHEMA_VERSION,
+    CAMPAIGN_CONTENT_SCHEMA_VERSION,
+)
 
 
 class CampaignStorageError(ValueError):
@@ -30,6 +46,34 @@ class CampaignStorageError(ValueError):
 class CampaignState:
     campaign: Campaign
     assessment_evidence: tuple[AssessmentEvidence, ...] = ()
+    learner_id: str = "default"
+    mission_plans: tuple[MissionPlan, ...] = ()
+    roadmap: CampaignRoadmap | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.campaign, Campaign):
+            raise ValueError("campaign must be a Campaign")
+        if type(self.assessment_evidence) is not tuple:
+            raise ValueError("assessment_evidence must be a tuple")
+        if type(self.mission_plans) is not tuple:
+            raise ValueError("mission_plans must be a tuple")
+        _require_non_empty_string(self.learner_id, "learner_id")
+        readiness_ids = tuple(mission.id for mission in self.campaign.missions)
+        for item in self.assessment_evidence:
+            if not isinstance(item, AssessmentEvidence):
+                raise ValueError("assessment evidence must be AssessmentEvidence")
+            if item.mission_id not in set(readiness_ids):
+                raise ValueError(
+                    "assessment evidence must reference a campaign mission"
+                )
+        if self.mission_plans:
+            validate_mission_map(self.mission_plans, readiness_ids)
+        if self.roadmap is not None:
+            if not isinstance(self.roadmap, CampaignRoadmap):
+                raise ValueError("roadmap must be a CampaignRoadmap")
+            if not self.mission_plans:
+                raise ValueError("roadmap requires mission plans")
+            validate_roadmap(self.roadmap, self.mission_plans)
 
 
 def campaign_to_dict(campaign: Campaign) -> dict:
@@ -120,6 +164,90 @@ def _assessment_evidence_from_dict(data: dict) -> AssessmentEvidence:
     )
 
 
+def mission_plan_to_dict(plan: MissionPlan) -> dict:
+    return {
+        "id": plan.id,
+        "title": plan.title,
+        "capability": plan.capability,
+        "rationale": plan.rationale,
+        "priority": plan.priority.value,
+        "prerequisite_ids": list(plan.prerequisite_ids),
+        "target_vocabulary": list(plan.target_vocabulary),
+        "target_structures": list(plan.target_structures),
+        "register_notes": list(plan.register_notes),
+        "cultural_context": list(plan.cultural_context),
+        "practice": [
+            {"kind": item.kind, "instructions": item.instructions}
+            for item in plan.practice
+        ],
+        "assessment": {
+            "prompt": plan.assessment.prompt,
+            "success_criteria": list(plan.assessment.success_criteria),
+        },
+        "common_failure_patterns": list(plan.common_failure_patterns),
+    }
+
+
+def mission_plan_from_dict(data: dict) -> MissionPlan:
+    assessment = data["assessment"]
+    return MissionPlan(
+        id=data["id"],
+        title=data["title"],
+        capability=data["capability"],
+        rationale=data["rationale"],
+        priority=MissionPriority(data["priority"]),
+        prerequisite_ids=tuple(data["prerequisite_ids"]),
+        target_vocabulary=tuple(data["target_vocabulary"]),
+        target_structures=tuple(data["target_structures"]),
+        register_notes=tuple(data["register_notes"]),
+        cultural_context=tuple(data["cultural_context"]),
+        practice=tuple(
+            PracticeActivity(item["kind"], item["instructions"])
+            for item in data["practice"]
+        ),
+        assessment=AssessmentScenario(
+            assessment["prompt"], tuple(assessment["success_criteria"])
+        ),
+        common_failure_patterns=tuple(data["common_failure_patterns"]),
+    )
+
+
+def roadmap_to_dict(roadmap: CampaignRoadmap) -> dict:
+    return {
+        "phases": [
+            {
+                "id": phase.id,
+                "title": phase.title,
+                "capability_summary": phase.capability_summary,
+                "mission_ids": list(phase.mission_ids),
+                "planned_review_after": phase.planned_review_after,
+                "planned_simulation_after": phase.planned_simulation_after,
+            }
+            for phase in roadmap.phases
+        ],
+        "active_phase_id": roadmap.active_phase_id,
+        "assumptions": list(roadmap.assumptions),
+    }
+
+
+def roadmap_from_dict(data: dict) -> CampaignRoadmap:
+    return CampaignRoadmap(
+        phases=tuple(
+            RoadmapPhase(
+                id=item["id"],
+                title=item["title"],
+                capability_summary=item["capability_summary"],
+                mission_ids=tuple(item["mission_ids"]),
+                planned_review_after=item["planned_review_after"],
+                planned_simulation_after=item["planned_simulation_after"],
+            )
+            for item in data["phases"]
+        ),
+        active_phase_id=data["active_phase_id"],
+        assumptions=tuple(data["assumptions"]),
+    )
+
+
 def _fsync_directory(directory: Path) -> None:
     if os.name != "posix":
         return
@@ -170,20 +298,105 @@ def save_campaign(path: Path, campaign: Campaign) -> None:
 
 
 def save_campaign_state(path: Path, state: CampaignState) -> None:
-    payload = {
-        "schema_version": CAMPAIGN_STATE_SCHEMA_VERSION,
+    _write_payload(path, _campaign_state_payload(state))
+
+
+def _campaign_state_payload(state: CampaignState) -> dict:
+    return {
+        "schema_version": CAMPAIGN_CONTENT_SCHEMA_VERSION,
         "campaign": campaign_to_dict(state.campaign),
         "assessment_evidence": [
             _assessment_evidence_to_dict(item)
             for item in state.assessment_evidence
         ],
+        "learner_id": state.learner_id,
+        "mission_plans": [mission_plan_to_dict(item) for item in state.mission_plans],
+        "roadmap": roadmap_to_dict(state.roadmap) if state.roadmap else None,
     }
-    _write_payload(path, payload)
 
 
-def _read_envelope(path: Path) -> dict:
+def save_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
+    """Atomically save state inside an already-open directory descriptor."""
+    temporary = f".state.json.{secrets.token_hex(16)}.tmp"
+    descriptor: int | None = None
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            json.dump(_campaign_state_payload(state), stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary,
+            "state.json",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary = ""
+        if os.name == "posix":
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                # Some POSIX filesystems do not support directory fsync.
+                pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
+def create_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
+    """Create state inside an open directory without replacing any entry."""
+    temporary = f".state.json.{secrets.token_hex(16)}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            json.dump(_campaign_state_payload(state), stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(
+            temporary,
+            "state.json",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        if os.name == "posix":
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                # Some POSIX filesystems do not support directory fsync.
+                pass
+
+
+def _read_envelope_text(text: str) -> dict:
+    try:
+        payload = json.loads(text)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise CampaignStorageError(
             "invalid campaign storage: malformed JSON"
@@ -206,17 +419,51 @@ def _read_envelope(path: Path) -> dict:
             "invalid campaign storage: campaign must be an object"
         )
     if (
-        version == CAMPAIGN_STATE_SCHEMA_VERSION
+        version in (CAMPAIGN_STATE_SCHEMA_VERSION, CAMPAIGN_CONTENT_SCHEMA_VERSION)
         and not isinstance(payload.get("assessment_evidence"), list)
     ):
         raise CampaignStorageError(
             "invalid campaign storage: assessment_evidence must be a list"
         )
+    if version == CAMPAIGN_CONTENT_SCHEMA_VERSION:
+        if not isinstance(payload.get("learner_id"), str):
+            raise CampaignStorageError(
+                "invalid campaign storage: learner_id must be a string"
+            )
+        if not isinstance(payload.get("mission_plans"), list):
+            raise CampaignStorageError(
+                "invalid campaign storage: mission_plans must be a list"
+            )
+        if payload.get("roadmap") is not None and not isinstance(
+            payload.get("roadmap"), dict
+        ):
+            raise CampaignStorageError(
+                "invalid campaign storage: roadmap must be an object or null"
+            )
     return payload
 
 
-def load_campaign_state(path: Path) -> CampaignState:
-    payload = _read_envelope(path)
+def _read_envelope(path: Path) -> dict:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise CampaignStorageError(
+            "invalid campaign storage: malformed JSON"
+        ) from error
+    return _read_envelope_text(text)
+
+
+def _read_envelope_file(stream: TextIO) -> dict:
+    try:
+        text = stream.read()
+    except UnicodeDecodeError as error:
+        raise CampaignStorageError(
+            "invalid campaign storage: malformed JSON"
+        ) from error
+    return _read_envelope_text(text)
+
+
+def _campaign_state_from_payload(payload: dict) -> CampaignState:
     try:
         campaign = campaign_from_dict(payload["campaign"])
         evidence = (
@@ -224,14 +471,38 @@ def load_campaign_state(path: Path) -> CampaignState:
                 _assessment_evidence_from_dict(item)
                 for item in payload["assessment_evidence"]
             )
-            if payload["schema_version"] == CAMPAIGN_STATE_SCHEMA_VERSION
+            if payload["schema_version"]
+            in (CAMPAIGN_STATE_SCHEMA_VERSION, CAMPAIGN_CONTENT_SCHEMA_VERSION)
             else ()
         )
+        if payload["schema_version"] == CAMPAIGN_CONTENT_SCHEMA_VERSION:
+            return CampaignState(
+                campaign=campaign,
+                assessment_evidence=evidence,
+                learner_id=payload["learner_id"],
+                mission_plans=tuple(
+                    mission_plan_from_dict(item)
+                    for item in payload["mission_plans"]
+                ),
+                roadmap=(
+                    roadmap_from_dict(payload["roadmap"])
+                    if payload["roadmap"] is not None
+                    else None
+                ),
+            )
         return CampaignState(campaign, evidence)
-    except (KeyError, TypeError, ValueError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise CampaignStorageError(
             "invalid campaign storage: invalid campaign payload"
         ) from error
+
+
+def load_campaign_state(path: Path) -> CampaignState:
+    return _campaign_state_from_payload(_read_envelope(path))
+
+
+def load_campaign_state_file(stream: TextIO) -> CampaignState:
+    return _campaign_state_from_payload(_read_envelope_file(stream))
 
 
 def load_campaign(path: Path) -> Campaign:

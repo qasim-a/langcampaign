@@ -24,6 +24,7 @@ from langcampaign.storage import (
     save_campaign,
     save_campaign_state,
 )
+from tests.fixtures import delayed_arrival, roadmap
 
 
 def test_campaign_round_trips_through_versioned_json(tmp_path):
@@ -186,7 +187,7 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
     payload = json.loads(path.read_text())
 
     assert loaded == state
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["assessment_evidence"] == [
         {
             "mission_id": "chat",
@@ -205,6 +206,93 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
             "cefr": None,
         },
     ]
+
+
+def test_version_three_state_round_trips_learner_content_and_roadmap(tmp_path):
+    from langcampaign.missions import validate_mission_map
+    from langcampaign.roadmaps import RoadmapPhase, validate_roadmap
+
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions(
+        (Mission("delayed-arrival", "Explain a delayed arrival"),)
+    )
+    mission_plans = (delayed_arrival(),)
+    stored_roadmap = replace(
+        roadmap(),
+        phases=(
+            RoadmapPhase(
+                "core-transactions",
+                "Core transactions",
+                "Handle routine hotel exchanges.",
+                ("delayed-arrival",),
+                True,
+                False,
+            ),
+        ),
+    )
+    state = CampaignState(
+        campaign=campaign,
+        learner_id="qasim",
+        mission_plans=mission_plans,
+        roadmap=stored_roadmap,
+    )
+    path = tmp_path / "state.json"
+
+    save_campaign_state(path, state)
+    loaded = load_campaign_state(path)
+
+    assert loaded == state
+    assert json.loads(path.read_text())["schema_version"] == 3
+    validate_mission_map(loaded.mission_plans, ("delayed-arrival",))
+    validate_roadmap(loaded.roadmap, loaded.mission_plans)
+
+
+def test_version_two_state_migrates_to_default_content_fields(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(existing_version_two_payload()))
+
+    loaded = load_campaign_state(path)
+
+    assert loaded.learner_id == "default"
+    assert loaded.mission_plans == ()
+    assert loaded.roadmap is None
+
+
+def existing_version_two_payload():
+    campaign = new_campaign("Read social media", "Japanese")
+    return {
+        "schema_version": 2,
+        "campaign": storage.campaign_to_dict(campaign),
+        "assessment_evidence": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate_payload",
+    (
+        lambda payload: payload.update(learner_id=None),
+        lambda payload: payload.update(mission_plans={}),
+        lambda payload: payload.update(roadmap=[]),
+        lambda payload: payload.update(mission_plans=[None]),
+        lambda payload: payload["mission_plans"][0].update(priority="unknown"),
+        lambda payload: payload.update(roadmap={"phases": [None]}),
+        lambda payload: payload.update(assessment_evidence=[None]),
+    ),
+)
+def test_malformed_version_three_content_raises_campaign_storage_error(
+    tmp_path, mutate_payload
+):
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions(
+        (Mission("delayed-arrival", "Explain a delayed arrival"),)
+    )
+    state = CampaignState(campaign, mission_plans=(delayed_arrival(),))
+    path = tmp_path / "state.json"
+    save_campaign_state(path, state)
+    payload = json.loads(path.read_text())
+    mutate_payload(payload)
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(CampaignStorageError, match="invalid campaign storage"):
+        load_campaign_state(path)
 
 
 def test_campaign_state_loader_accepts_legacy_campaign_file(tmp_path):

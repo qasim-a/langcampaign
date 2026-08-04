@@ -4,7 +4,7 @@
 </div>
 
 <p align="center">
-  <strong>A goal-driven language-learning framework for AI agents that turns the things you want to do into practical missions, adaptive training, and visible progress.</strong>
+  <strong>A goal-driven language-learning framework for AI agents that turns practical goals into useful missions, evidence-backed progress, and resumable campaigns.</strong>
 </p>
 
 ---
@@ -12,241 +12,194 @@
 ## Contents
 
 - [What is LangCampaign?](#-what-is-langcampaign)
-- [Get started](#-get-started)
-- [Choose your campaign](#-choose-your-campaign)
-- [What learning looks like](#-what-learning-looks-like)
-- [Understand your progress](#-understand-your-progress)
-- [Change your campaign](#-change-your-campaign)
+- [The lean learner journey](#-the-lean-learner-journey)
+- [What a mission looks like](#-what-a-mission-looks-like)
+- [Progress and adaptation](#-progress-and-adaptation)
+- [New goals and resuming](#-new-goals-and-resuming)
 - [Core philosophy](#-core-philosophy)
+- [Internal engine reference](#-internal-engine-reference)
 - [Current status](#-current-status)
 
 ## 🎯 What is LangCampaign?
 
-LangCampaign organizes language learning around a **campaign**: a practical goal you want to accomplish, with or without a deadline.
+LangCampaign organizes language learning around a **campaign**: a practical
+goal you want to accomplish, with or without a deadline.
 
-Your goal does not need to be formal. Preparing for a trip, interview, or presentation is a valid campaign—but so is texting friends, understanding social-media posts, talking with family, following online creators, playing games, or enjoying books and shows with less translation.
+Preparing for a trip, interview, or presentation is a valid campaign—but so is
+texting friends, understanding social-media posts, talking with family,
+following online creators, playing games, or enjoying books and shows with
+less translation.
 
-LangCampaign turns that goal into a series of **missions**. Each mission develops something you can actually do in the language, checks whether you can do it independently, and uses the result to choose what comes next.
+LangCampaign turns that goal into small missions. Each mission develops one
+useful capability, gives you guided practice, checks what you can do without
+hints, and records evidence that informs the next action.
 
 ```text
-Your goal → Practical missions → Realistic practice → Evidence of progress
+Your goal → Small practical missions → Independent checks → Evidence-backed progress
 ```
 
-## ⚡ Get started
+## ⚡ The lean learner journey
 
 > [!NOTE]
-> LangCampaign is currently an early-stage framework. The tested campaign engine is implemented; ready-to-install AI-agent integrations and generated learning missions are the next layer. The prompts below show the intended learner experience as those integrations are added.
+> LangCampaign is currently an early-stage framework. The tested campaign
+> engine and campaign-content foundation are implemented. The installable
+> Codex setup and teaching workflow described below is approved follow-on work,
+> not yet an operational integration.
 
-### 1. Decide what you want to do
+### 1. Describe what you need
 
-Start with a real outcome instead of a vague request to “learn Spanish” or “study Japanese.”
+Setup uses one short exchange. Tell the agent:
 
-Examples:
+- The target language.
+- The practical goal.
+- A deadline, if one exists.
+- The weekly time you can realistically use.
+- A compact description of what you can already do.
 
-- Handle a trip to Mexico without relying on translation for routine situations
-- Text Korean-speaking friends more naturally
-- Understand Japanese social-media posts and memes
-- Prepare for a French-language job interview
-- Join a Portuguese gaming community
-- Talk with extended family in Arabic
+You can describe prior knowledge through real situations: “I can text
+friends,” “I studied for two years but struggle to speak,” or “I am a complete
+beginner.” You do not need a proficiency label or a self-designed curriculum.
 
-### 2. Choose a Targeted or Flexible campaign
+Defaults are applied silently. The lean MVP has one fixed presentation and
+coaching style: concise, candid, and encouraging. Setup does not ask you to
+choose curriculum scope, coaching style, presentation style, or an exact daily
+commitment.
 
-Use a **Targeted campaign** when you have a specific outcome and target date. Use a **Flexible campaign** when you want steady progress without deadline pressure.
-
-### 3. Tell your AI agent what matters
-
-Include:
-
-- The language
-- What you want to do
-- Your target date, if there is one
-- How much time you can realistically study
-- What you can already do
-- The kinds of activities you enjoy
-
-You do not need to know your CEFR level or design your own curriculum.
-
-### 4. Start your campaign
-
-For a flexible, casual goal:
+Example:
 
 ```text
-Create a flexible Japanese campaign for understanding social-media posts
-and responding casually. I can study for about 20 minutes four times per
-week. Use a Balanced curriculum and Supportive coaching.
+Help me learn Spanish for independently handling a trip to Mexico in October.
+I can spend about two hours per week. I studied Spanish in school and can read
+simple messages, but I have trouble answering unfamiliar questions.
 ```
 
-For a date-based goal:
+### 2. Begin immediately
+
+Setup creates a coarse internal roadmap, two or three upcoming mission
+outlines, and detailed content only for the first mission. The roadmap stays
+hidden during normal learning and can be shown as a concise summary if you ask
+for it.
+
+The first real mission doubles as calibration. Self-reported knowledge helps
+choose the starting difficulty, but only independently demonstrated ability
+becomes progress evidence. There is no separate placement examination before
+practice begins.
+
+### 3. Continue in small batches
+
+Later mission details are generated as you approach them, using the evidence
+already collected. LangCampaign does not need to generate a detailed full
+curriculum upfront or rebuild the whole roadmap after every response.
+
+## 🔁 What a mission looks like
+
+One continuous learning conversation follows this sequence:
 
 ```text
-Create a targeted Spanish campaign for independently handling a trip to
-Mexico on October 12. I can study for 30 minutes per day. Use a Mission
-Focused curriculum and Direct coaching.
-```
-
-If you are unsure what to choose, start with a **Flexible campaign**, **Balanced curriculum**, and **Supportive coaching**.
-
-### 5. Complete the first mission
-
-A mission teaches and tests one real capability. You might respond to a delayed-train notice, join a group-chat exchange, explain a problem at a hotel, or understand an unfamiliar reply.
-
-The agent uses your performance—not just time spent—to decide what you are ready to do next.
-
-## 🧭 Choose your campaign
-
-### Campaign type
-
-| Type | Best for | How it behaves |
-| --- | --- | --- |
-| **Targeted** | Trips, interviews, exams, presentations, relocations, and scheduled events | Plans backward from a target date, forecasts readiness, and warns when your pace is at risk |
-| **Flexible** | Conversation, media, friendships, family, online communities, and open-ended improvement | Adapts to your interests and schedule without creating artificial deadline pressure |
-
-You can switch between them later.
-
-### Curriculum scope
-
-| Scope | Best for | What you study |
-| --- | --- | --- |
-| **Mission Focused** | Limited time or a narrow outcome | Almost entirely what is necessary for your immediate goal |
-| **Balanced** | Most learners | Goal preparation plus useful grammar, culture, and transferable context |
-| **Foundational** | Broader, longer-term understanding | Your campaign goal plus more of the language around it |
-
-**Balanced is the default.** In a Targeted campaign, optional context is reduced if it begins to threaten your main goal.
-
-### Coaching style
-
-| Style | Best for | What it feels like |
-| --- | --- | --- |
-| **Supportive** | Learners who want candid guidance with encouragement | Warm feedback, visible celebrations, and colorful progress updates |
-| **Direct** | Learners who prefer concise feedback | Brief corrections, little ceremony, and normal scheduling flexibility |
-| **Boot Camp** | Learners who want firm structure and accountability | Frequent checks, fixed expectations, immediate corrective practice, and limited skipping |
-
-**Supportive is the default.** Coaching style changes how feedback is delivered, not how your performance is scored.
-
-## 🔁 What learning looks like
-
-Every campaign follows the same adaptive loop:
-
-```text
-🎯 Mission
+🎯 Practical capability and scenario
    ↓
-Practice in a realistic situation
+Teach only what is needed now
    ↓
-Mission check
+Short guided practice with decreasing support
    ↓
-Feedback and progress update
+Clearly announced no-hints check
    ↓
-Next mission or review
+Evidence, compact progress, and next action
 ```
 
-### Missions
+The no-hints check is independent in the educational sense. Language
+introduced or corrected during the check is not credited as something you
+demonstrated independently in that same check.
 
-Short training units built around useful tasks, such as arranging plans, reading informal posts, handling unexpected questions, or correcting a misunderstanding.
+## 📊 Progress and adaptation
 
-### Mission checks
-
-Quick assessments that look at whether you completed the task, understood the exchange, formed your own response, used an appropriate tone, and relied on hints.
-
-### Campaign simulations
-
-Longer scenarios that combine several missions. A travel simulation might ask you to understand a delay, request an alternative, notify a hotel, and correct a misunderstanding in one continuous situation.
-
-### Adaptive planning
-
-After meaningful sessions, LangCampaign adjusts your priorities using what you demonstrated, what needs review, how much you actually studied, and—when relevant—how much time remains.
-
-## 📊 Understand your progress
-
-LangCampaign keeps different kinds of progress separate so one encouraging number does not hide what is really happening.
-
-| Signal | What it means |
-| --- | --- |
-| **Mission readiness** | What you have demonstrated you can currently do |
-| **Target-date forecast** | Where your readiness is projected to be by the target date at your current pace |
-| **Training completed** | How much of the current study plan you have completed |
-| **Approximate CEFR** | A familiar, evidence-based description of the language ability observed so far |
-
-Completing lessons does not automatically increase readiness. Readiness comes from demonstrated performance and may fall when a later review shows that something has been forgotten.
+Normal progress is intentionally compact: one colored status emoji, one short
+evidence-based result, a text progress bar, and the next mission or review.
 
 ```text
-🌍 SPANISH TRAVEL CAMPAIGN · 18 days remaining
+✅ Mission passed
 
-Mission readiness  [███████████░░░░░░░░░] 54%
-Target-date status [██████████████░░░░░░] AT RISK
-Training completed [████████░░░░░░░░░░░░] 4.2 / 10 hours
+You explained the delay, gave a revised arrival time, and answered the
+follow-up without hints.
 
-✅ Demonstrated: ordering and paying
-✅ Demonstrated: hotel check-in
-🟡 Developing: asking for directions
-⬜ Not assessed: explaining a travel problem
+Progress  ██████░░░░  60%
 
-🎯 Next priority: understanding follow-up questions
-⚠️ Recovery action: add two 25-minute sessions this week
+Next: handle an unexpected reservation problem.
 ```
 
-CEFR feedback is approximate and limited to the abilities actually observed. For example:
+Adaptation stays local and understandable:
 
-> You demonstrated approximately A2 written interaction across four independent assessments.
+- A pass records evidence and advances.
+- Partial performance preserves earned credit and schedules focused practice
+  or a retry.
+- `too easy` raises the next mission's difficulty.
+- `too hard` adds prerequisite support before a retry.
+- A previously demonstrated capability that later fails is marked for review.
 
-That estimate provides context; your ability to complete the campaign's real missions remains the primary measure.
+The lean learner view does not include a rich dashboard, long motivational
+summary, proficiency estimate, multi-mission simulation, or full forecast
+controls.
 
-## 🔄 Change your campaign
+## 🔄 New goals and resuming
 
-Your original plan is not a contract you are trapped inside. You can change:
+Campaigns have three learner-relevant states:
 
-- Your goal or target situations
-- The target date
-- Available study time
-- Targeted or Flexible campaign type
-- Curriculum scope
-- Coaching style
-- Preferred activities and content
+- **Active:** currently guiding learning.
+- **Paused:** preserved and resumable.
+- **Completed:** intentionally finished and retained as history.
 
-LangCampaign preserves relevant work and assessment evidence, recalculates the plan, and explains what the change means.
+A materially new goal starts a new campaign instead of editing the existing
+goal in place. LangCampaign pauses the current campaign, creates the new one,
+and carries forward only relevant evidence-backed capabilities. The previous
+campaign keeps its roadmap, evidence, and progress and can be resumed later.
 
-Example requests:
-
-```text
-I can only study three days per week now. Update my schedule and show how
-that changes my target-date forecast.
-```
-
-```text
-Change my curriculum from Mission Focused to Balanced. Keep my current goal
-and all of my completed assessment evidence.
-```
-
-```text
-My trip has been postponed to November 8. Update the campaign and restore
-broader context lessons if I am now on track.
-```
-
-```text
-Remove the deadline and turn this into a Flexible campaign focused on
-casual conversation and texting.
-```
+Resuming a paused campaign preserves its state and normally pauses whichever
+campaign is currently active.
 
 ## 🌱 Core philosophy
 
-- **Train for real use.** The ability to accomplish your goal matters more than completing a generic course.
-- **Casual goals count.** Friendship, family, entertainment, and online participation are legitimate reasons to learn.
-- **Use honest forecasts.** A target date guides planning, but LangCampaign does not guarantee results regardless of practice.
-- **Give credit for achievement.** Assessment should confidently recognize what you have demonstrated without pretending to be an official certification.
-- **Add context when it helps.** Broader grammar and culture support the goal when time allows; they should not quietly displace it.
-- **Adapt without erasing progress.** Changing direction should preserve useful evidence and previously developed capabilities.
+- **Train for real use.** Accomplishing the learner's goal matters more than
+  completing a generic course.
+- **Casual goals count.** Friendship, family, entertainment, and online
+  participation are legitimate reasons to learn.
+- **Credit demonstrated ability.** Self-report can guide difficulty, but
+  progress comes from evidence.
+- **Generate only what is useful now.** Keep the roadmap coarse and mission
+  details small-batch.
+- **Adapt without erasing progress.** Preserve earned credit, prior campaigns,
+  and resumable context.
+- **Keep the interaction responsive.** Routine learner actions should need no
+  more than one model response and one local LangCampaign command.
+
+## 🛠️ Internal engine reference
+
+The platform-neutral engine predates the lean learner workflow and retains
+tested APIs for Targeted and Flexible campaign records, configurable stored
+curriculum/coaching fields, readiness calculations, approximate CEFR
+summaries, target-date forecasts, campaign revision, and richer progress
+rendering. These capabilities remain for schema compatibility and internal
+development reference; they are not configuration choices or output promises
+in the approved lean learner journey.
+
+The campaign-content foundation adds validated mission maps, a coarse hidden
+roadmap, repository-local learner state, atomic persistence, and five JSON
+commands for future Codex workflows. Only an explicit `show-roadmap` command
+reveals a sanitized phase summary; normal setup, validation, and listing
+responses omit roadmap details and assumptions.
 
 ## 🚧 Current status
 
-LangCampaign currently provides the tested, platform-neutral campaign engine for:
+The campaign-content foundation now validates generated mission maps, stores a
+coarse internal roadmap, keeps learner state under `learners/`, and exposes a
+structured command boundary for upcoming Codex skills. The roadmap remains out
+of normal session output but can be summarized when a learner asks to see it.
 
-- Targeted and Flexible campaign state
-- Editable goals, schedules, curriculum scope, and coaching style
-- Evidence-based readiness and approximate CEFR summaries
-- Target-date forecasts and realistic recovery guidance
-- Coaching-aware text progress reports
-- Resumable campaign and assessment state
+The approved learner-facing lean MVP is the next layer: fast setup with silent
+defaults, active/paused/completed lifecycle transitions, small-batch missions,
+embedded calibration, guided practice and no-hints checks, evidence capture,
+simple difficulty adjustment, and compact progress. Codex delivery,
+end-to-end learner evaluation, latency checks, and product hardening follow the
+lean runtime.
 
-The next layer is the end-user agent experience: installable Codex and Claude skills, mission generation, interactive teaching sessions, and automatic review scheduling.
-
-LangCampaign is not an accredited language-testing body. Its readiness and CEFR reports are learning tools based on demonstrated campaign performance.
+Installable Codex setup and teaching workflows are future work and are not yet
+operational. LangCampaign is not an accredited language-testing body.
