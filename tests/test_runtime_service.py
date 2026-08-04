@@ -43,3 +43,14 @@ def test_difficulty_at_check_ready_requires_replacement_content(tmp_path):
     adjusted = adjust_difficulty(tmp_path, "qasim", "campaign-a", ready.revision, "delayed-arrival", 1, DifficultyAdjustment.HARDER)
     assert adjusted.session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
     assert adjusted.session.content_refresh_required is True
+
+
+def test_assessed_next_action_is_atomically_consumed_for_retry(tmp_path):
+    create_and_activate_campaign(tmp_path, _state())
+    started = start_mission(tmp_path, "qasim", "campaign-a", 0, "delayed-arrival", _content())
+    guided = advance_mission(tmp_path, "qasim", "campaign-a", started.revision, "delayed-arrival", 1)
+    ready = advance_mission(tmp_path, "qasim", "campaign-a", guided.revision, "delayed-arrival", 1)
+    assessed = submit_assessment(tmp_path, "qasim", "campaign-a", ready.revision, "delayed-arrival", 1, (CriterionScore("delay", 40), CriterionScore("time", 40)), True, "text", "Partial", now=lambda: datetime(2026, 8, 4, tzinfo=timezone.utc))
+    retry = start_mission(tmp_path, "qasim", "campaign-a", assessed.revision, "delayed-arrival", _content())
+    assert retry.session.attempt_number == 2
+    assert retry.session.kind.value == "retry"

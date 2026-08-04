@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from math import floor
+from decimal import Decimal, ROUND_HALF_UP
 
 from .assessment import AssessmentEvidence
 from .missions import MissionPlan, MissionPriority
@@ -266,9 +266,9 @@ def best_independent_scores(campaign: Campaign, evidence: tuple[AssessmentEviden
 
 def runtime_progress(campaign: Campaign, evidence: tuple[AssessmentEvidence, ...]) -> RuntimeProgress:
     best = best_independent_scores(campaign, evidence)
-    total = sum(mission.weight for mission in campaign.missions)
-    earned = sum(mission.weight * best.get(mission.id, 0) for mission in campaign.missions)
-    percent = floor(earned / total + 0.5) if total else 0
+    total = sum((Decimal(str(mission.weight)) for mission in campaign.missions), Decimal())
+    earned = sum((Decimal(str(mission.weight)) * best.get(mission.id, 0) for mission in campaign.missions), Decimal())
+    percent = int((earned / total).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if total else 0
     return RuntimeProgress(percent, tuple((mission.id, best[mission.id]) for mission in campaign.missions if mission.id in best))
 
 
@@ -300,11 +300,6 @@ def select_next_action(campaign: Campaign, plans: tuple[MissionPlan, ...], roadm
         if statuses.get(mission_id) is MissionStatus.REVIEW_DUE:
             return NextAction(NextActionType.REVIEW, mission_id, phase_by_id[mission_id].id)
     active_index = next(index for index, phase in enumerate(roadmap.phases) if phase.id == roadmap.active_phase_id)
-    for phase in roadmap.phases[: active_index + 1]:
-        if phase.planned_review_after and phase.id not in completed_review_phase_ids:
-            critical = [mission_id for mission_id in phase.mission_ids if plan_by_id[mission_id].priority is MissionPriority.CRITICAL]
-            if critical and all(statuses.get(mission_id) is MissionStatus.DEMONSTRATED for mission_id in critical):
-                return NextAction(NextActionType.REVIEW, critical[0], phase.id)
     required = set()
     for plan in plans:
         if plan.priority is MissionPriority.CRITICAL:

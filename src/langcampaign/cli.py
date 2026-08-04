@@ -428,13 +428,21 @@ def _snapshot_data(snapshot) -> dict:
 
 def _validate_mission_content(payload: dict, learners_root: Path) -> dict:
     del learners_root
-    content = _runtime_content_from_input(_field(payload, "content"))
+    raw = _field(payload, "content")
+    try:
+        content = _runtime_content_from_input(raw)
+    except CommandInputError as error:
+        candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
+        return {
+            "valid": False, "content": {}, "correction_allowed": candidate == 1,
+            "issues": [{"field": "content", "code": "invalid_content", "message": str(error)}],
+        }
     result = validate_mission_content(content)
     return {
         "valid": result.valid,
         "content": __import__("langcampaign.storage", fromlist=["mission_content_to_dict"]).mission_content_to_dict(result.content) if result.content else {},
         "correction_allowed": result.correction_allowed,
-        "issues": [{"field": issue.field, "code": issue.code, "message": issue.message} for issue in result.issues],
+        **({"issues": [{"field": issue.field, "code": issue.code, "message": issue.message} for issue in result.issues]} if result.issues else {}),
     }
 
 

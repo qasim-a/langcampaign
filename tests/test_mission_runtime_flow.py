@@ -20,3 +20,13 @@ def test_runtime_commands_are_registered_and_support_resumable_flow(tmp_path):
     assert assessed.success
     assert assessed.data["session"]["checkpoint"] == "assessed"
     assert run_command("mission-status", identity, tmp_path).data["revision"] == 4
+
+
+def test_invalid_content_candidate_correction_protocol_is_structured(tmp_path):
+    invalid = mission_content_payload()
+    invalid["rubric"][0]["weight"] = 40
+    first = run_command("validate-mission-content", {"content": invalid}, tmp_path).to_dict()
+    invalid["candidate_number"] = 2
+    second = run_command("validate-mission-content", {"content": invalid}, tmp_path).to_dict()
+    assert first["data"]["valid"] is False and first["data"]["correction_allowed"] is True
+    assert second["data"]["valid"] is False and second["data"]["correction_allowed"] is False

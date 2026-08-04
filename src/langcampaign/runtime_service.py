@@ -110,15 +110,31 @@ def start_mission(root, learner_id, campaign_id, expected_revision: int, mission
     if not valid.valid:
         raise MissionRuntimeError(RuntimeErrorCode.INVALID_CONTENT, "invalid mission content", valid.issues)
     def transform(state):
-        if state.active_session is not None:
-            raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "an active mission session already exists")
         plan_by_id = {plan.id: plan for plan in state.mission_plans}
         if mission_id not in plan_by_id:
             raise MissionRuntimeError(RuntimeErrorCode.MISSION_NOT_FOUND, "mission does not exist")
         if content.capability != plan_by_id[mission_id].capability:
             raise MissionRuntimeError(RuntimeErrorCode.INVALID_CONTENT, "content capability does not match mission")
+        kind = AttemptKind.INITIAL
+        if state.active_session is not None:
+            previous = state.active_session
+            if previous.checkpoint is not MissionCheckpoint.ASSESSED or previous.next_action is None:
+                raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "an active mission session already exists")
+            action = previous.next_action
+            if action.mission_id is None:
+                return replace(state, active_session=None)
+            if action.mission_id != mission_id:
+                raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "mission does not match persisted next action")
+            kind = _next_attempt_kind(action)
+        else:
+            # Initial starts are constrained to the first eligible active-phase mission.
+            active = next(phase for phase in state.roadmap.phases if phase.id == state.roadmap.active_phase_id)
+            statuses = {mission.id: mission.status for mission in state.campaign.missions}
+            eligible = next((item for item in active.mission_ids if statuses[item] is not MissionStatus.DEMONSTRATED and all(statuses[pre] is MissionStatus.DEMONSTRATED for pre in plan_by_id[item].prerequisite_ids)), None)
+            if eligible != mission_id:
+                raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "mission is not the next eligible mission")
         prior = [item.attempt_number for item in state.mission_attempts if item.mission_id == mission_id]
-        return replace(state, active_session=ActiveMissionSession(mission_id, max(prior, default=0) + 1, _next_attempt_kind(None), MissionCheckpoint.TEACHING, DifficultyAdjustment.STANDARD, content))
+        return replace(state, active_session=ActiveMissionSession(mission_id, max(prior, default=0) + 1, kind, MissionCheckpoint.TEACHING, DifficultyAdjustment.STANDARD, content))
     return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
 
 
@@ -135,8 +151,10 @@ def advance_mission(root, learner_id, campaign_id, expected_revision: int, missi
                 session = replace(session, content=replacement_content, content_refresh_required=False)
             elif replacement_content is not None:
                 raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "replacement content is not required")
-            return replace(state, active_session=replace(session, checkpoint=MissionCheckpoint.CHECK_READY, adjustment=DifficultyAdjustment.STANDARD))
-        if session.checkpoint is MissionCheckpoint.ASSESSED and session.next_action and session.next_action.mission_id:
+            if replacement_content is not None and replacement_content.capability != session.content.capability:
+                raise MissionRuntimeError(RuntimeErrorCode.INVALID_CONTENT, "replacement content capability does not match active mission")
+            return replace(state, active_session=replace(session, checkpoint=MissionCheckpoint.CHECK_READY))
+        if session.checkpoint is MissionCheckpoint.ASSESSED and session.next_action and session.next_action.mission_id is None:
             return replace(state, active_session=None)
         raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "checkpoint cannot advance")
     return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
@@ -167,7 +185,6 @@ def _with_status(campaign, mission_id, outcome, kind):
 
 def submit_assessment(root, learner_id, campaign_id, expected_revision: int, mission_id: str, attempt_number: int, criterion_scores: tuple[CriterionScore, ...], independent: bool, modality: str, result_statement: str, *, now=None) -> RuntimeSnapshot:
     if independent is not True: raise MissionRuntimeError(RuntimeErrorCode.INDEPENDENCE_REQUIRED, "independent assessment is required")
-    when = (now or (lambda: datetime.now(timezone.utc)))()
     def duplicate(state):
         for item in state.mission_attempts:
             if (item.mission_id, item.attempt_number) == (mission_id, attempt_number):
@@ -179,14 +196,30 @@ def submit_assessment(root, learner_id, campaign_id, expected_revision: int, mis
         session = _expected_session(state, mission_id, attempt_number)
         if session.checkpoint is not MissionCheckpoint.CHECK_READY:
             raise MissionRuntimeError(RuntimeErrorCode.ASSESSMENT_NOT_READY, "assessment requires check ready")
+        when = (now or (lambda: datetime.now(timezone.utc)))()
+        if when.tzinfo is None or when.utcoffset() is None:
+            raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, "service clock must return an aware datetime")
         score = derive_score(session.content.rubric, criterion_scores); outcome = outcome_for_score(score)
         attempt = MissionAttemptRecord(mission_id, attempt_number, session.kind, session.content.rubric, criterion_scores, score, outcome, modality, result_statement, when)
         campaign = _with_status(state.campaign, mission_id, outcome, session.kind)
+        completed_reviews = state.completed_review_phase_ids
+        phase_by_mission = {item: phase for phase in state.roadmap.phases for item in phase.mission_ids}
+        phase = phase_by_mission[mission_id]
+        if session.kind is AttemptKind.REVIEW and outcome is MissionOutcome.PASS:
+            critical = [item for item in phase.mission_ids if next(plan for plan in state.mission_plans if plan.id == item).priority.value == "critical"]
+            statuses = {item.id: item.status for item in campaign.missions}
+            if all(statuses[item] is MissionStatus.DEMONSTRATED for item in critical):
+                completed_reviews = (*completed_reviews, phase.id)
+        elif outcome is MissionOutcome.PASS and phase.planned_review_after and phase.id not in completed_reviews:
+            critical = [item for item in phase.mission_ids if next(plan for plan in state.mission_plans if plan.id == item).priority.value == "critical"]
+            statuses = {item.id: item.status for item in campaign.missions}
+            if critical and all(statuses[item] is MissionStatus.DEMONSTRATED for item in critical):
+                campaign = campaign.with_missions(tuple(replace(item, status=MissionStatus.REVIEW_DUE) if item.id in critical else item for item in campaign.missions))
         assessed_session = replace(session, checkpoint=MissionCheckpoint.ASSESSED, adjustment=DifficultyAdjustment.STANDARD, latest_outcome=outcome)
         provisional = replace(state, campaign=campaign, assessment_evidence=(*state.assessment_evidence, AssessmentEvidence(mission_id, score, True, modality, when)), mission_attempts=(*state.mission_attempts, attempt), active_session=assessed_session)
-        action = select_next_action(campaign, state.mission_plans, state.roadmap, state.completed_review_phase_ids, session, outcome)
+        action = select_next_action(campaign, state.mission_plans, state.roadmap, completed_reviews, session, outcome)
         roadmap = state.roadmap
-        if action.target_phase_id and roadmap and action.target_phase_id != roadmap.active_phase_id:
+        if action.target_phase_id and roadmap and next(index for index, phase in enumerate(roadmap.phases) if phase.id == action.target_phase_id) > next(index for index, phase in enumerate(roadmap.phases) if phase.id == roadmap.active_phase_id):
             roadmap = replace(roadmap, active_phase_id=action.target_phase_id)
-        return replace(provisional, roadmap=roadmap, active_session=replace(assessed_session, next_action=action))
+        return replace(provisional, roadmap=roadmap, completed_review_phase_ids=completed_reviews, active_session=replace(assessed_session, next_action=action))
     return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform, idempotent_if=duplicate))

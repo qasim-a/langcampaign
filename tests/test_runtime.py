@@ -107,6 +107,17 @@ def test_best_independent_scores_and_weighted_half_up_runtime_progress():
     assert progress.best_scores == (("delayed-arrival", 90), ("train-options", 9))
 
 
+def test_runtime_progress_uses_decimal_half_up_for_small_weights():
+    campaign = Campaign("c", "g", "Spanish", CampaignSettings(), (
+        Mission("one", "One", 0.01), Mission("two", "Two", 0.01),
+    ), datetime(2026, 1, 1, tzinfo=timezone.utc))
+    evidence = (
+        AssessmentEvidence("one", 6, True, "text", datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        AssessmentEvidence("two", 1, True, "text", datetime(2026, 1, 1, tzinfo=timezone.utc)),
+    )
+    assert runtime_progress(campaign, evidence).percent == 4
+
+
 @pytest.mark.parametrize(("percent", "bar"), [(0, "░" * 10), (9, "░" * 10), (10, "█" + "░" * 9), (40, "█" * 4 + "░" * 6), (99, "█" * 9 + "░"), (100, "█" * 10)])
 def test_runtime_progress_rendering_uses_floor_ten_segment_bar(percent, bar):
     from langcampaign.runtime import RuntimeProgress
