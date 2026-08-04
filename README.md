@@ -42,13 +42,14 @@ Your goal → Small practical missions → Independent checks → Evidence-backe
 
 > [!NOTE]
 > LangCampaign is currently an early-stage framework. The tested campaign
-> engine and campaign-content foundation are implemented. The installable
-> Codex setup and teaching workflow described below is approved follow-on work,
-> not yet an operational integration.
+> engine, campaign-content foundation, and lean setup/lifecycle persistence are
+> implemented. Installable Codex teaching workflows and generated mission
+> conversations remain future work.
 
 ### 1. Describe what you need
 
-Setup uses one short exchange. Tell the agent:
+Setup uses one short exchange and silently applies its fixed defaults. Tell the
+agent:
 
 - The target language.
 - The practical goal.
@@ -150,8 +151,9 @@ Campaigns have three learner-relevant states:
 
 A materially new goal starts a new campaign instead of editing the existing
 goal in place. LangCampaign pauses the current campaign, creates the new one,
-and carries forward only relevant evidence-backed capabilities. The previous
-campaign keeps its roadmap, evidence, and progress and can be resumed later.
+and carries forward only explicitly mapped evidence-backed capabilities. The
+previous campaign keeps its roadmap, evidence, and progress and can be resumed
+later. Exactly one campaign is active at a time.
 
 Resuming a paused campaign preserves its state and normally pauses whichever
 campaign is currently active.
@@ -189,17 +191,12 @@ responses omit roadmap details and assumptions.
 
 ## 🚧 Current status
 
-The campaign-content foundation now validates generated mission maps, stores a
-coarse internal roadmap, keeps learner state under `learners/`, and exposes a
-structured command boundary for upcoming Codex skills. The roadmap remains out
-of normal session output but can be summarized when a learner asks to see it.
+The command boundary now validates generated mission maps, stores learner state
+under `learners/`, applies lean setup defaults, retains prior-knowledge context
+without crediting it as evidence, and supports active/paused/completed campaign
+lifecycle commands. The roadmap remains out of normal session output but can
+be summarized when a learner asks to see it.
 
-The approved learner-facing lean MVP is the next layer: fast setup with silent
-defaults, active/paused/completed lifecycle transitions, small-batch missions,
-embedded calibration, guided practice and no-hints checks, evidence capture,
-simple difficulty adjustment, and compact progress. Codex delivery,
-end-to-end learner evaluation, latency checks, and product hardening follow the
-lean runtime.
-
-Installable Codex setup and teaching workflows are future work and are not yet
-operational. LangCampaign is not an accredited language-testing body.
+Generated mission conversations, installable Codex teaching workflows,
+end-to-end learner evaluation, latency checks, and product hardening remain
+future work. LangCampaign is not an accredited language-testing body.
