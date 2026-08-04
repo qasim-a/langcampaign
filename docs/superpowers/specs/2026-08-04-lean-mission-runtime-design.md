@@ -119,8 +119,9 @@ round-half-up arithmetic; Codex does not submit an authoritative total score.
 Campaign state persists immutable mission-attempt records. Each record is
 uniquely identified within a campaign by `(mission_id, attempt_number)` and
 contains the rubric snapshot, criterion scores, derived score, outcome,
-engine-generated assessment time, concise result statement, and the evidence
-record produced by that attempt.
+engine-generated assessment time, and concise result statement. Schema
+validation requires one corresponding `AssessmentEvidence` with the same
+mission, derived score, modality, and timestamp.
 
 The first attempt for each mission is number `1`. Starting another attempt for
 the same mission uses one plus the highest persisted attempt number, including
@@ -239,7 +240,7 @@ After assessment, the engine deterministically selects one next-action type:
 4. The next eligible roadmap mission after a pass.
 5. Goal readiness when every critical mission is passed and no review is due.
    Supporting prerequisite missions remain required when referenced by a
-   critical mission; extension missions are optional.
+   critical mission; enrichment missions are optional.
 
 Outcome and review rules are:
 
