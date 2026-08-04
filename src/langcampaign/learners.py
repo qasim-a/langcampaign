@@ -2,6 +2,8 @@ import errno
 import os
 import re
 import stat
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -28,6 +30,22 @@ class CampaignSelectionError(LearnerRepositoryError):
 
 class CampaignAlreadyExistsError(LearnerRepositoryError):
     """Create-only persistence found an existing campaign state."""
+
+
+class CampaignRevisionConflict(LearnerRepositoryError):
+    """A compare-and-swap expected an older campaign revision."""
+
+    def __init__(self, current: CampaignState):
+        self.current = current
+        super().__init__(f"revision conflict; current revision is {current.revision}")
+
+
+class CampaignInactiveError(CampaignSelectionError):
+    """A campaign exists but is not the learner's active campaign."""
+
+
+class CampaignCompletedError(CampaignInactiveError):
+    """A completed campaign cannot accept runtime mutations."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +91,57 @@ _DIRECTORY_FLAGS = (
 )
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
 _MISSING_OR_UNSAFE = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
+_MUTATION_LOCKS: dict[tuple[str, str, str], threading.Lock] = {}
+_MUTATION_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _exclusive_entry_lock(directory_fd: int, name: str, key: tuple[str, ...]):
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise LearnerRepositoryError(f"{name} is not a regular file")
+        try:
+            import fcntl
+        except ImportError:  # Cross-process locking is POSIX-only.
+            with _MUTATION_LOCKS_GUARD:
+                local_lock = _MUTATION_LOCKS.setdefault(key, threading.Lock())
+            with local_lock:
+                yield
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _locked_learner(root: Path, learner_id: str, *, create: bool):
+    canonical = normalize_learner_id(learner_id)
+    root_fd = _open_root(root, create=create)
+    if root_fd is None:
+        raise CampaignSelectionError("campaign does not exist")
+    try:
+        learner_fd = (
+            _open_or_create_directory(
+                root_fd, canonical, "learner directory is not a directory"
+            )
+            if create else _open_directory(root_fd, canonical)
+        )
+        if learner_fd is None:
+            raise CampaignSelectionError("campaign does not exist")
+        try:
+            key = (str(Path(root).resolve()), canonical, "lifecycle")
+            with _exclusive_entry_lock(learner_fd, ".lifecycle.lock", key):
+                yield learner_fd, canonical
+        finally:
+            os.close(learner_fd)
+    finally:
+        os.close(root_fd)
 
 
 def _open_directory(directory_fd: int, name: str) -> int | None:
@@ -192,6 +261,69 @@ def save_learner_campaign(
     finally:
         os.close(root_fd)
     return path
+
+
+def mutate_learner_campaign(
+    root: Path, learner_id: str, campaign_id: str, expected_revision: int,
+    transform, *, idempotent_if=None, require_active: bool = False,
+) -> CampaignState:
+    """Descriptor-confined CAS; POSIX uses an advisory per-campaign file lock."""
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise LearnerRepositoryError("expected_revision must be a nonnegative integer")
+    if type(require_active) is not bool:
+        raise LearnerRepositoryError("require_active must be a bool")
+    canonical = normalize_learner_id(learner_id)
+    campaign_id = _safe_id(campaign_id, "campaign_id")
+    root_fd = _open_root(root, create=False)
+    if root_fd is None:
+        raise CampaignSelectionError("campaign does not exist")
+    try:
+        learner_fd = _open_directory(root_fd, canonical)
+        if learner_fd is None:
+            raise CampaignSelectionError("campaign does not exist")
+        try:
+            lifecycle_key = (str(Path(root).resolve()), canonical, "lifecycle")
+            with _exclusive_entry_lock(learner_fd, ".lifecycle.lock", lifecycle_key):
+                campaign_fd = _open_directory(learner_fd, campaign_id)
+                if campaign_fd is None:
+                    raise CampaignSelectionError("campaign does not exist")
+                try:
+                    state_key = (str(Path(root).resolve()), canonical, campaign_id)
+                    with _exclusive_entry_lock(campaign_fd, ".state.lock", state_key):
+                        current = _load_state(campaign_fd, canonical, campaign_id)
+                        if require_active:
+                            states = _campaign_states_at(learner_fd, canonical)
+                            index = _load_learner_index(learner_fd)
+                            resolved = _legacy_index_for(states, index)
+                            lifecycle = resolved.lifecycle_for(campaign_id)
+                            if lifecycle is CampaignLifecycle.COMPLETED:
+                                raise CampaignCompletedError("campaign is completed")
+                            if lifecycle is not CampaignLifecycle.ACTIVE:
+                                raise CampaignInactiveError("campaign is not active")
+                        return _mutate_loaded(current, expected_revision, transform, idempotent_if, campaign_fd)
+                finally:
+                    os.close(campaign_fd)
+        finally:
+            os.close(learner_fd)
+    finally:
+        os.close(root_fd)
+
+
+def _mutate_loaded(current, expected_revision, transform, idempotent_if, campaign_fd):
+    if current is None:
+        raise CampaignSelectionError("campaign does not exist")
+    if idempotent_if is not None and idempotent_if(current):
+        return current
+    if current.revision != expected_revision:
+        raise CampaignRevisionConflict(current)
+    updated = transform(current)
+    if not isinstance(updated, CampaignState):
+        raise LearnerRepositoryError("campaign transform must return CampaignState")
+    if updated.campaign.id != current.campaign.id or updated.learner_id != current.learner_id:
+        raise LearnerRepositoryError("campaign transform changed identity")
+    updated = replace(updated, revision=current.revision + 1)
+    save_campaign_state_at(campaign_fd, updated)
+    return updated
 
 
 def _campaign_states(root: Path, learner_id: str) -> tuple[CampaignState, ...]:
@@ -324,6 +456,16 @@ def _read_lifecycle(
         os.close(root_fd)
 
 
+def _read_lifecycle_at(
+    learner_fd: int, canonical_learner_id: str
+) -> tuple[tuple[CampaignState, ...], LearnerCampaignIndex | None]:
+    states = _campaign_states_at(learner_fd, canonical_learner_id)
+    index = _load_learner_index(learner_fd)
+    if index is not None:
+        _validate_index_campaigns(index, states)
+    return states, index
+
+
 def _legacy_index_for(
     states: tuple[CampaignState, ...], index: LearnerCampaignIndex | None
 ) -> LearnerCampaignIndex:
@@ -348,23 +490,17 @@ def _active_state(
 
 
 def _publish_index(root: Path, learner_id: str, index: LearnerCampaignIndex) -> None:
-    canonical_learner_id = normalize_learner_id(learner_id)
-    root_fd = _open_root(root, create=True)
-    if root_fd is None:
-        raise LearnerRepositoryError("learner root does not exist")
-    try:
-        learner_fd = _open_or_create_directory(
-            root_fd, canonical_learner_id, "learner directory is not a directory"
-        )
-        try:
-            _validate_index_campaigns(
-                index, _campaign_states_at(learner_fd, canonical_learner_id)
-            )
-            save_learner_index_at(learner_fd, index)
-        finally:
-            os.close(learner_fd)
-    finally:
-        os.close(root_fd)
+    with _locked_learner(root, learner_id, create=True) as (learner_fd, canonical):
+        _publish_index_at(learner_fd, canonical, index)
+
+
+def _publish_index_at(
+    learner_fd: int, canonical_learner_id: str, index: LearnerCampaignIndex
+) -> None:
+    _validate_index_campaigns(
+        index, _campaign_states_at(learner_fd, canonical_learner_id)
+    )
+    save_learner_index_at(learner_fd, index)
 
 
 def list_campaign_summaries(
@@ -390,58 +526,93 @@ def select_active_campaign(root: Path, learner_id: str) -> CampaignState:
     return _active_state(states, index)
 
 
+def select_campaign_lifecycle(
+    root: Path, learner_id: str, campaign_id: str
+) -> tuple[CampaignState, CampaignLifecycle]:
+    """Read a campaign and its lifecycle under the shared learner lock."""
+    campaign_id = _safe_id(campaign_id, "campaign_id")
+    with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        selected = next(
+            (state for state in states if state.campaign.id == campaign_id), None
+        )
+        if selected is None:
+            raise CampaignSelectionError("campaign does not exist")
+        lifecycle = _legacy_index_for(states, index).lifecycle_for(campaign_id)
+        return selected, lifecycle
+
+
 def activate_campaign(root: Path, learner_id: str, campaign_id: str) -> CampaignState:
     campaign_id = _safe_id(campaign_id, "campaign_id")
-    states, index, canonical_learner_id = _read_lifecycle(root, learner_id)
-    selected = next((state for state in states if state.campaign.id == campaign_id), None)
-    if selected is None:
-        raise CampaignSelectionError("campaign does not exist")
-    resolved = _legacy_index_for(states, index)
-    if campaign_id in resolved.completed_campaign_ids:
-        raise CampaignSelectionError("completed campaigns cannot be activated")
-    _publish_index(
-        root,
-        canonical_learner_id,
-        LearnerCampaignIndex(campaign_id, resolved.completed_campaign_ids),
-    )
-    return selected
+    with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        selected = next((state for state in states if state.campaign.id == campaign_id), None)
+        if selected is None:
+            raise CampaignSelectionError("campaign does not exist")
+        resolved = _legacy_index_for(states, index)
+        if campaign_id in resolved.completed_campaign_ids:
+            raise CampaignSelectionError("completed campaigns cannot be activated")
+        _publish_index_at(
+            learner_fd,
+            canonical,
+            LearnerCampaignIndex(campaign_id, resolved.completed_campaign_ids),
+        )
+        return selected
 
 
 def complete_campaign(root: Path, learner_id: str, campaign_id: str) -> CampaignState:
     campaign_id = _safe_id(campaign_id, "campaign_id")
-    states, index, canonical_learner_id = _read_lifecycle(root, learner_id)
-    selected = next((state for state in states if state.campaign.id == campaign_id), None)
-    if selected is None:
-        raise CampaignSelectionError("campaign does not exist")
-    resolved = _legacy_index_for(states, index)
-    completed = tuple(
-        dict.fromkeys((*resolved.completed_campaign_ids, campaign_id))
-    )
-    _publish_index(
-        root,
-        canonical_learner_id,
-        LearnerCampaignIndex(
-            None if resolved.active_campaign_id == campaign_id else resolved.active_campaign_id,
-            completed,
-        ),
-    )
-    return selected
+    with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        selected = next((state for state in states if state.campaign.id == campaign_id), None)
+        if selected is None:
+            raise CampaignSelectionError("campaign does not exist")
+        resolved = _legacy_index_for(states, index)
+        completed = tuple(
+            dict.fromkeys((*resolved.completed_campaign_ids, campaign_id))
+        )
+        _publish_index_at(
+            learner_fd,
+            canonical,
+            LearnerCampaignIndex(
+                None if resolved.active_campaign_id == campaign_id else resolved.active_campaign_id,
+                completed,
+            ),
+        )
+        return selected
 
 
 def create_and_activate_campaign(root: Path, state: CampaignState) -> Path:
-    states, index, canonical_learner_id = _read_lifecycle(root, state.learner_id)
-    resolved = _legacy_index_for(states, index)
-    if index is None and resolved.active_campaign_id is not None:
-        _publish_index(root, canonical_learner_id, resolved)
-    elif index is None and len(states) > 1:
-        raise CampaignSelectionError("active campaign selection is ambiguous")
-    path = save_learner_campaign(root, state, create_only=True)
-    _publish_index(
-        root,
-        canonical_learner_id,
-        LearnerCampaignIndex(state.campaign.id, resolved.completed_campaign_ids),
-    )
+    path = campaign_state_path(root, state.learner_id, state.campaign.id)
+    with _locked_learner(root, state.learner_id, create=True) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        resolved = _legacy_index_for(states, index)
+        if index is None and resolved.active_campaign_id is not None:
+            _publish_index_at(learner_fd, canonical, resolved)
+        elif index is None and len(states) > 1:
+            raise CampaignSelectionError("active campaign selection is ambiguous")
+        _create_campaign_at(learner_fd, state)
+        _publish_index_at(
+            learner_fd,
+            canonical,
+            LearnerCampaignIndex(state.campaign.id, resolved.completed_campaign_ids),
+        )
     return path
+
+
+def _create_campaign_at(learner_fd: int, state: CampaignState) -> None:
+    campaign_fd = _open_or_create_directory(
+        learner_fd,
+        state.campaign.id,
+        "campaign directory is not a directory",
+    )
+    try:
+        try:
+            create_campaign_state_at(campaign_fd, state)
+        except FileExistsError as error:
+            raise CampaignAlreadyExistsError("campaign already exists") from error
+    finally:
+        os.close(campaign_fd)
 
 
 def transition_campaign(
@@ -459,39 +630,40 @@ def transition_campaign(
         not isinstance(transfer, EvidenceTransfer) for transfer in transfers
     ):
         raise CampaignSelectionError("evidence transfers must be a tuple")
-    states, index, _ = _read_lifecycle(root, canonical_learner_id)
-    old_state = _active_state(states, index)
-    resolved = _legacy_index_for(states, index)
-    source_ids = set()
-    target_ids = set()
-    old_mission_ids = {mission.id for mission in old_state.campaign.missions}
-    new_mission_ids = {mission.id for mission in new_state.campaign.missions}
-    for transfer in transfers:
-        if transfer.source_mission_id in source_ids:
-            raise CampaignSelectionError("duplicate source mission mapping")
-        if transfer.target_mission_id in target_ids:
-            raise CampaignSelectionError("duplicate target mission mapping")
-        if transfer.source_mission_id not in old_mission_ids:
-            raise CampaignSelectionError("source mission does not exist")
-        if transfer.target_mission_id not in new_mission_ids:
-            raise CampaignSelectionError("target mission does not exist")
-        source_ids.add(transfer.source_mission_id)
-        target_ids.add(transfer.target_mission_id)
-    if index is None:
-        _publish_index(root, canonical_learner_id, resolved)
-    target_by_source = {
-        transfer.source_mission_id: transfer.target_mission_id for transfer in transfers
-    }
-    transferred_evidence = tuple(
-        replace(evidence, mission_id=target_by_source[evidence.mission_id])
-        for evidence in old_state.assessment_evidence
-        if evidence.mission_id in target_by_source
-    )
-    persisted_state = replace(new_state, assessment_evidence=transferred_evidence)
-    save_learner_campaign(root, persisted_state, create_only=True)
-    _publish_index(
-        root,
-        canonical_learner_id,
-        LearnerCampaignIndex(new_state.campaign.id, resolved.completed_campaign_ids),
-    )
-    return persisted_state
+    with _locked_learner(root, canonical_learner_id, create=False) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        old_state = _active_state(states, index)
+        resolved = _legacy_index_for(states, index)
+        source_ids = set()
+        target_ids = set()
+        old_mission_ids = {mission.id for mission in old_state.campaign.missions}
+        new_mission_ids = {mission.id for mission in new_state.campaign.missions}
+        for transfer in transfers:
+            if transfer.source_mission_id in source_ids:
+                raise CampaignSelectionError("duplicate source mission mapping")
+            if transfer.target_mission_id in target_ids:
+                raise CampaignSelectionError("duplicate target mission mapping")
+            if transfer.source_mission_id not in old_mission_ids:
+                raise CampaignSelectionError("source mission does not exist")
+            if transfer.target_mission_id not in new_mission_ids:
+                raise CampaignSelectionError("target mission does not exist")
+            source_ids.add(transfer.source_mission_id)
+            target_ids.add(transfer.target_mission_id)
+        if index is None:
+            _publish_index_at(learner_fd, canonical, resolved)
+        target_by_source = {
+            transfer.source_mission_id: transfer.target_mission_id for transfer in transfers
+        }
+        transferred_evidence = tuple(
+            replace(evidence, mission_id=target_by_source[evidence.mission_id])
+            for evidence in old_state.assessment_evidence
+            if evidence.mission_id in target_by_source
+        )
+        persisted_state = replace(new_state, assessment_evidence=transferred_evidence)
+        _create_campaign_at(learner_fd, persisted_state)
+        _publish_index_at(
+            learner_fd,
+            canonical,
+            LearnerCampaignIndex(new_state.campaign.id, resolved.completed_campaign_ids),
+        )
+        return persisted_state

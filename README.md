@@ -34,6 +34,13 @@ LangCampaign turns that goal into small missions. Each mission develops one
 useful capability, gives you guided practice, checks what you can do without
 hints, and records evidence that informs the next action.
 
+The deterministic engine now supports resumable checkpoints, rubric-derived
+assessment evidence, local adaptation, compact progress, and persisted content.
+For example: use `start-mission`, advance to `check_ready`, then send criterion
+scores to `submit-assessment`. The installable Codex teaching skill remains the
+next milestone; LangCampaign does not claim ChatGPT, voice, hosted persistence,
+or a finished consumer UI.
+
 ```text
 Your goal → Small practical missions → Independent checks → Evidence-backed progress
 ```

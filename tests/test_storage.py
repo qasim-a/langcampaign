@@ -28,6 +28,11 @@ from langcampaign.storage import (
     save_campaign,
     save_campaign_state,
 )
+from langcampaign.runtime import (
+    ActiveMissionSession, AttemptKind, CriterionScore, DifficultyAdjustment,
+    MissionAttemptRecord, MissionCheckpoint, MissionContent, MissionOutcome,
+    NextAction, NextActionType, RubricCriterion,
+)
 from tests.fixtures import delayed_arrival, roadmap
 
 
@@ -191,7 +196,7 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
     payload = json.loads(path.read_text())
 
     assert loaded == state
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["assessment_evidence"] == [
         {
             "mission_id": "chat",
@@ -245,7 +250,7 @@ def test_version_four_state_round_trips_learner_content_and_roadmap(tmp_path):
     loaded = load_campaign_state(path)
 
     assert loaded == state
-    assert json.loads(path.read_text())["schema_version"] == 4
+    assert json.loads(path.read_text())["schema_version"] == 5
     validate_mission_map(loaded.mission_plans, ("delayed-arrival",))
     validate_roadmap(loaded.roadmap, loaded.mission_plans)
 
@@ -293,7 +298,177 @@ def test_version_four_round_trips_prior_knowledge(tmp_path):
     save_campaign_state(path, state)
 
     assert load_campaign_state(path) == state
-    assert json.loads(path.read_text())["schema_version"] == 4
+    assert json.loads(path.read_text())["schema_version"] == 5
+
+
+def _runtime_content():
+    return MissionContent(
+        "generation-1", 1, "Explain delay", "Hotel arrival", ("Explain",),
+        ("llego tarde",), ("Say it",), "Respond without help",
+        (RubricCriterion("delay", "States delay", 50), RubricCriterion("time", "Gives time", 50)),
+    )
+
+
+def test_version_five_round_trips_runtime_state_and_nested_records(tmp_path):
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions((Mission("reply", "Reply"),))
+    content = _runtime_content()
+    record = MissionAttemptRecord(
+        "reply", 2, AttemptKind.RETRY, content.rubric,
+        (CriterionScore("delay", 80), CriterionScore("time", 100)), 90,
+        MissionOutcome.PASS, "text", "Clear reply", datetime(2026, 8, 4, tzinfo=timezone.utc),
+    )
+    plan = delayed_arrival(id="reply", title="Reply", capability=content.capability)
+    stored_roadmap = replace(roadmap(), phases=(
+        storage.RoadmapPhase("phase-1", "Phase", "Reply", ("reply",), True, False),
+    ), active_phase_id="phase-1")
+    state = CampaignState(campaign, (AssessmentEvidence("reply", 90, True, "text", record.assessed_at),), "qasim", (plan,), stored_roadmap, "", 7,
+        ActiveMissionSession("reply", 3, AttemptKind.RETRY, MissionCheckpoint.CHECK_READY, DifficultyAdjustment.STANDARD, content),
+        (record,), ("phase-1",))
+    path = tmp_path / "state.json"
+
+    save_campaign_state(path, state)
+    payload = json.loads(path.read_text())
+
+    assert load_campaign_state(path) == state
+    assert payload["schema_version"] == 5
+    assert payload["revision"] == 7
+    assert payload["active_session"]["mission_id"] == "reply"
+    assert payload["active_session"]["attempt_number"] == 3
+    assert payload["mission_attempts"][0]["criterion_scores"] == [{"criterion_id": "delay", "score": 80}, {"criterion_id": "time", "score": 100}]
+    assert payload["completed_review_phase_ids"] == ["phase-1"]
+
+
+def _assessed_runtime_state(*, evidence=None):
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions((Mission("reply", "Reply"),))
+    content = _runtime_content()
+    assessed_at = datetime(2026, 8, 4, tzinfo=timezone.utc)
+    record = MissionAttemptRecord(
+        "reply", 1, AttemptKind.INITIAL, content.rubric,
+        (CriterionScore("delay", 80), CriterionScore("time", 100)), 90,
+        MissionOutcome.PASS, "text", "Clear reply", assessed_at,
+    )
+    plan = delayed_arrival(id="reply", title="Reply", capability=content.capability)
+    stored_roadmap = replace(roadmap(), phases=(
+        storage.RoadmapPhase("phase-1", "Phase", "Reply", ("reply",), False, False),
+    ), active_phase_id="phase-1")
+    matching = AssessmentEvidence("reply", 90, True, "text", assessed_at)
+    return CampaignState(
+        campaign,
+        (matching,) if evidence is None else evidence,
+        "qasim",
+        (plan,),
+        stored_roadmap,
+        active_session=ActiveMissionSession(
+            "reply", 1, AttemptKind.INITIAL, MissionCheckpoint.ASSESSED,
+            DifficultyAdjustment.STANDARD, content, MissionOutcome.PASS,
+            NextAction(NextActionType.GOAL_READY_TO_COMPLETE),
+        ),
+        mission_attempts=(record,),
+    )
+
+
+@pytest.mark.parametrize("raw_value", ({"prompt": "Try"}, "Try"))
+def test_v5_runtime_nested_containers_require_exact_json_types(tmp_path, raw_value):
+    state = replace(_assessed_runtime_state(), active_session=replace(_assessed_runtime_state().active_session, checkpoint=MissionCheckpoint.CHECK_READY, latest_outcome=None, next_action=None), mission_attempts=(), assessment_evidence=())
+    path = tmp_path / "state.json"
+    save_campaign_state(path, state)
+    payload = json.loads(path.read_text())
+    payload["active_session"]["content"]["guided_prompts"] = raw_value
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(CampaignStorageError):
+        load_campaign_state(path)
+
+
+@pytest.mark.parametrize("evidence", ((), None))
+def test_mission_attempt_requires_exactly_one_independent_evidence_record(evidence):
+    base = _assessed_runtime_state()
+    matching = base.assessment_evidence[0]
+    invalid = (replace(matching, independent=False),) if evidence == () else (matching, matching)
+
+    with pytest.raises(ValueError, match="exactly one independent"):
+        replace(base, assessment_evidence=invalid)
+
+
+def test_assessed_session_without_matching_attempt_is_an_explicit_validation_error():
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="matching mission attempt"):
+        replace(base, mission_attempts=(), assessment_evidence=())
+
+
+def test_assessed_session_requires_its_persisted_next_action():
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="next action"):
+        replace(base, active_session=replace(base.active_session, next_action=None))
+
+
+@pytest.mark.parametrize(
+    "next_action",
+    (
+        NextAction(NextActionType.NEXT_MISSION, "missing", "phase-1"),
+        NextAction(NextActionType.NEXT_MISSION, "reply", "missing-phase"),
+    ),
+)
+def test_v5_next_action_references_known_missions_and_phases(next_action):
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="next action"):
+        replace(base, active_session=replace(base.active_session, next_action=next_action))
+
+
+def test_assessed_session_rubric_matches_immutable_attempt():
+    base = _assessed_runtime_state()
+    different_content = replace(
+        base.active_session.content,
+        rubric=(RubricCriterion("meaning", "Meaning", 100),),
+    )
+
+    with pytest.raises(ValueError, match="rubric"):
+        replace(base, active_session=replace(base.active_session, content=different_content))
+
+
+def test_all_malformed_v5_assessed_session_shapes_are_wrapped(tmp_path):
+    path = tmp_path / "state.json"
+    save_campaign_state(path, _assessed_runtime_state())
+    payload = json.loads(path.read_text())
+    payload["mission_attempts"] = []
+    payload["assessment_evidence"] = []
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(CampaignStorageError, match="invalid campaign storage"):
+        load_campaign_state(path)
+
+
+@pytest.mark.parametrize("version", (1, 2, 3, 4))
+def test_historical_schemas_load_runtime_defaults_without_rewriting(tmp_path, version):
+    payload = existing_version_two_payload() if version == 2 else existing_version_three_payload() if version == 3 else storage._campaign_state_payload(CampaignState(new_campaign("Text", "Spanish")))
+    payload["schema_version"] = version
+    if version == 1:
+        payload.pop("assessment_evidence", None)
+        payload.pop("learner_id", None)
+        payload.pop("mission_plans", None)
+        payload.pop("roadmap", None)
+        payload.pop("prior_knowledge", None)
+    if version == 2:
+        payload.pop("learner_id", None); payload.pop("mission_plans", None); payload.pop("roadmap", None); payload.pop("prior_knowledge", None)
+    if version == 3:
+        payload.pop("prior_knowledge", None)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(payload))
+    before = path.read_bytes()
+
+    loaded = load_campaign_state(path)
+
+    assert (loaded.revision, loaded.active_session, loaded.mission_attempts, loaded.completed_review_phase_ids) == (0, None, (), ())
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("revision", (True, -1, 1.2))
+def test_campaign_state_rejects_non_integer_nonnegative_revision(revision):
+    with pytest.raises(ValueError, match="revision"):
+        CampaignState(new_campaign("Text", "Spanish"), revision=revision)
 
 
 def test_version_three_migrates_with_empty_prior_knowledge(tmp_path):

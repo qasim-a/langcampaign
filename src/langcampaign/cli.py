@@ -36,6 +36,12 @@ from .storage import (
     CampaignStorageError,
     mission_plan_from_dict,
     roadmap_from_dict,
+    mission_content_from_dict,
+)
+from .runtime import CriterionScore, DifficultyAdjustment
+from .runtime_service import (
+    ContentIssue, MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission,
+    mission_status, start_mission, submit_assessment, validate_mission_content,
 )
 
 
@@ -43,7 +49,7 @@ from .storage import (
 class CommandResult:
     success: bool
     data: dict | None = None
-    error: str | None = None
+    error: str | dict | None = None
 
     def to_dict(self) -> dict:
         result = {"success": self.success}
@@ -382,6 +388,126 @@ def _complete_campaign(payload: dict, learners_root: Path) -> dict:
     return {"completed_campaign_id": completed.campaign.id}
 
 
+def _integer(value: object, name: str) -> int:
+    if type(value) is not int:
+        raise CommandInputError(f"{name} must be an integer")
+    return value
+
+
+def _runtime_content_from_input(value: object):
+    try:
+        data = _object(value, "content")
+        if "assessed_at" in data:
+            raise CommandInputError("content must not include assessed_at")
+        return mission_content_from_dict(data)
+    except (CommandInputError, KeyError, TypeError, ValueError) as error:
+        issue = ContentIssue("content", "invalid_content", f"invalid mission content: {error}")
+        raise MissionRuntimeError(
+            RuntimeErrorCode.INVALID_CONTENT,
+            "invalid mission content",
+            (issue,),
+        ) from error
+
+
+def _identity(payload: dict):
+    return (
+        _string(_field(payload, "learner_id"), "learner_id"),
+        _string(_field(payload, "campaign_id"), "campaign_id"),
+    )
+
+
+def _snapshot_data(snapshot) -> dict:
+    session = None
+    if snapshot.session is not None:
+        item = snapshot.session
+        from .storage import active_session_to_dict
+        session = active_session_to_dict(item)
+    return {
+        "revision": snapshot.revision,
+        "session": session,
+        "progress": {"percent": snapshot.progress.percent, "bar": snapshot.progress.bar},
+        "next_action": (session["next_action"] if session else None),
+        "rendered_progress": snapshot.rendered_progress,
+        "latest_result": (
+            __import__("langcampaign.storage", fromlist=["mission_attempt_to_dict"])
+            .mission_attempt_to_dict(snapshot.latest_result)
+            if snapshot.latest_result else None
+        ),
+    }
+
+
+def _validate_mission_content(payload: dict, learners_root: Path) -> dict:
+    del learners_root
+    raw = _field(payload, "content")
+    try:
+        content = _runtime_content_from_input(raw)
+    except MissionRuntimeError as error:
+        candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
+        issues = error.issues or (
+            ContentIssue("content", "invalid_content", str(error)),
+        )
+        return {
+            "valid": False,
+            "content": {},
+            "correction_allowed": candidate == 1,
+            "issues": [
+                {"field": issue.field, "code": issue.code, "message": issue.message}
+                for issue in issues
+            ],
+        }
+    except CommandInputError as error:
+        candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
+        return {
+            "valid": False, "content": {}, "correction_allowed": candidate == 1,
+            "issues": [{"field": "content", "code": "invalid_content", "message": str(error)}],
+        }
+    result = validate_mission_content(content)
+    return {
+        "valid": result.valid,
+        "content": __import__("langcampaign.storage", fromlist=["mission_content_to_dict"]).mission_content_to_dict(result.content) if result.content else {},
+        "correction_allowed": result.correction_allowed,
+        **({"issues": [{"field": issue.field, "code": issue.code, "message": issue.message} for issue in result.issues]} if result.issues else {}),
+    }
+
+
+def _mission_status(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    return _snapshot_data(mission_status(learners_root, learner_id, campaign_id))
+
+
+def _start_mission(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    return _snapshot_data(start_mission(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _runtime_content_from_input(_field(payload, "content"))))
+
+
+def _advance_mission(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    replacement = _runtime_content_from_input(payload["replacement_content"]) if "replacement_content" in payload else None
+    return _snapshot_data(advance_mission(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), replacement))
+
+
+def _adjust_difficulty(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    try:
+        adjustment = DifficultyAdjustment(_string(_field(payload, "adjustment"), "adjustment"))
+    except ValueError as error:
+        raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, "invalid adjustment") from error
+    return _snapshot_data(adjust_difficulty(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), adjustment))
+
+
+def _submit_assessment(payload: dict, learners_root: Path) -> dict:
+    if "assessed_at" in payload:
+        raise CommandInputError("assessed_at is engine generated")
+    learner_id, campaign_id = _identity(payload)
+    try:
+        scores = tuple(CriterionScore(_string(_field(_object(item, "criterion score"), "criterion_id"), "criterion_id"), _integer(_field(_object(item, "criterion score"), "score"), "score")) for item in _array(_field(payload, "criterion_scores"), "criterion_scores"))
+    except ValueError as error:
+        raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, str(error)) from error
+    independent = _field(payload, "independent")
+    if type(independent) is not bool: raise CommandInputError("independent must be a bool")
+    return _snapshot_data(submit_assessment(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), scores, independent, _string(_field(payload, "modality"), "modality"), _string(_field(payload, "result_statement"), "result_statement")))
+
+
 COMMANDS = {
     "setup": _setup,
     "list-campaigns": _list_campaigns,
@@ -392,6 +518,12 @@ COMMANDS = {
     "transition-campaign": _transition_campaign,
     "resume-campaign": _resume_campaign,
     "complete-campaign": _complete_campaign,
+    "validate-mission-content": _validate_mission_content,
+    "mission-status": _mission_status,
+    "start-mission": _start_mission,
+    "advance-mission": _advance_mission,
+    "adjust-difficulty": _adjust_difficulty,
+    "submit-assessment": _submit_assessment,
 }
 
 
@@ -406,7 +538,22 @@ def run_command(command: str, payload: dict, learners_root: Path) -> CommandResu
         return CommandResult(False, error="learners_root must be a path")
     try:
         return CommandResult(True, data=COMMANDS[command](payload, root))
+    except MissionRuntimeError as error:
+        details = {"code": error.code.value, "message": str(error)}
+        if error.issues:
+            details["issues"] = [{"field": issue.field, "code": issue.code, "message": issue.message} for issue in error.issues]
+        if error.current_revision is not None:
+            details["current_revision"] = error.current_revision
+        return CommandResult(False, error=details)
     except CommandInputError as error:
+        if command in {
+            "validate-mission-content", "mission-status", "start-mission",
+            "advance-mission", "adjust-difficulty", "submit-assessment",
+        }:
+            return CommandResult(
+                False,
+                error={"code": RuntimeErrorCode.INVALID_REQUEST.value, "message": str(error)},
+            )
         return CommandResult(False, error=str(error))
 
 

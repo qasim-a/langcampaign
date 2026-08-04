@@ -134,3 +134,17 @@ def setup_payload():
             "assumptions": ["The learner reads Latin script."],
         },
     }
+
+
+def mission_content_payload(candidate_number=1):
+    return {
+        "generation_id": "runtime-1", "candidate_number": candidate_number,
+        "capability": "Notify a hotel of a late arrival and answer one follow-up.",
+        "scenario": "A hotel calls", "teaching_objectives": ["State the delay"],
+        "essential_language": ["Mi tren tiene retraso"], "guided_prompts": ["Try a reply"],
+        "assessment_prompt": "Reply without help",
+        "rubric": [
+            {"id": "delay", "description": "State delay", "weight": 50},
+            {"id": "time", "description": "Give revised time", "weight": 50},
+        ],
+    }

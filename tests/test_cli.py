@@ -15,7 +15,7 @@ from langcampaign.cli import run_command
 from langcampaign.learners import save_learner_campaign, select_campaign
 from langcampaign.models import CampaignType, CoachingStyle, CurriculumScope
 from langcampaign.storage import CampaignState
-from tests.fixtures import setup_payload
+from tests.fixtures import mission_content_payload, setup_payload
 
 
 def _module_environment():
@@ -538,7 +538,7 @@ def test_argparse_invocation_errors_return_exactly_one_json_envelope(
     assert completed.stderr == ""
 
 
-def test_command_boundary_exposes_exactly_the_five_foundation_commands():
+def test_command_boundary_exposes_exactly_fifteen_commands():
     assert tuple(cli.COMMANDS) == (
         "setup",
         "list-campaigns",
@@ -549,6 +549,12 @@ def test_command_boundary_exposes_exactly_the_five_foundation_commands():
         "transition-campaign",
         "resume-campaign",
         "complete-campaign",
+        "validate-mission-content",
+        "mission-status",
+        "start-mission",
+        "advance-mission",
+        "adjust-difficulty",
+        "submit-assessment",
     )
 
 
@@ -662,3 +668,170 @@ def test_transition_command_does_not_hide_a_dependency_programmer_fault(
         run_command(
             "transition-campaign", _transition_payload(created.data["campaign_id"]), tmp_path
         )
+
+
+def test_missing_campaign_runtime_smoke(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "langcampaign", "mission-status",
+            "--learners-root", str(tmp_path), "--learner-id", "qasim",
+            "--campaign-id", "missing",
+        ], input="{}", text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["error"]["code"] == "campaign_not_found"
+
+
+@pytest.mark.parametrize(
+    ("command", "payload"),
+    (
+        ("mission-status", {}),
+        (
+            "start-mission",
+            {
+                "learner_id": "Qasim Ali",
+                "campaign_id": "campaign-a",
+                "expected_revision": True,
+                "mission_id": "delayed-arrival",
+                "content": mission_content_payload(),
+            },
+        ),
+        (
+            "adjust-difficulty",
+            {
+                "learner_id": "Qasim Ali",
+                "campaign_id": "campaign-a",
+                "expected_revision": 0,
+                "mission_id": "delayed-arrival",
+                "attempt_number": 1,
+                "adjustment": "sideways",
+            },
+        ),
+    ),
+)
+def test_runtime_request_parse_failures_use_typed_invalid_request(tmp_path, command, payload):
+    result = run_command(command, payload, tmp_path)
+
+    assert result.success is False
+    assert result.error["code"] == "invalid_request"
+
+
+def test_malformed_runtime_content_uses_typed_invalid_content(tmp_path):
+    payload = mission_content_payload()
+    del payload["rubric"]
+
+    result = run_command(
+        "start-mission",
+        {
+            "learner_id": "Qasim Ali",
+            "campaign_id": "campaign-a",
+            "expected_revision": 0,
+            "mission_id": "delayed-arrival",
+            "content": payload,
+        },
+        tmp_path,
+    )
+
+    assert result.success is False
+    assert result.error["code"] == "invalid_content"
+
+
+def test_incomplete_assessment_rubric_uses_typed_invalid_request(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    identity = {
+        "learner_id": "Qasim Ali",
+        "campaign_id": created.data["campaign_id"],
+        "mission_id": "delayed-arrival",
+        "attempt_number": 1,
+    }
+    started = run_command(
+        "start-mission",
+        {**identity, "expected_revision": 0, "content": mission_content_payload()},
+        tmp_path,
+    )
+    guided = run_command("advance-mission", {**identity, "expected_revision": started.data["revision"]}, tmp_path)
+    ready = run_command("advance-mission", {**identity, "expected_revision": guided.data["revision"]}, tmp_path)
+
+    result = run_command(
+        "submit-assessment",
+        {
+            **identity,
+            "expected_revision": ready.data["revision"],
+            "criterion_scores": [{"criterion_id": "delay", "score": 80}],
+            "independent": True,
+            "modality": "text",
+            "result_statement": "Incomplete",
+        },
+        tmp_path,
+    )
+
+    assert result.success is False
+    assert result.error["code"] == "invalid_request"
+
+
+def test_out_of_range_assessment_score_uses_typed_invalid_request(tmp_path):
+    result = run_command(
+        "submit-assessment",
+        {
+            "learner_id": "Qasim Ali",
+            "campaign_id": "campaign-a",
+            "expected_revision": 0,
+            "mission_id": "delayed-arrival",
+            "attempt_number": 1,
+            "criterion_scores": [{"criterion_id": "delay", "score": 101}],
+            "independent": True,
+            "modality": "text",
+            "result_statement": "Invalid score",
+        },
+        tmp_path,
+    )
+
+    assert result.success is False
+    assert result.error["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        {"learner_id": "###", "campaign_id": "campaign-a"},
+        {"learner_id": "Qasim Ali", "campaign_id": "../campaign-a"},
+    ),
+)
+def test_mission_status_malformed_repository_ids_emit_one_typed_json_envelope(
+    tmp_path, identity
+):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "langcampaign",
+            "mission-status",
+            "--learners-root",
+            str(tmp_path),
+        ],
+        input=json.dumps(identity),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_module_environment(),
+    )
+
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout)["error"]["code"] == "invalid_request"
+    assert completed.stdout.count("\n") == 1
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(("candidate_number", "correction_allowed"), ((1, True), (2, False)))
+def test_validate_content_preserves_actionable_rubric_weight_issue(
+    tmp_path, candidate_number, correction_allowed
+):
+    content = mission_content_payload(candidate_number)
+    content["rubric"][1]["weight"] = 40
+
+    result = run_command("validate-mission-content", {"content": content}, tmp_path)
+
+    assert result.success is True
+    assert result.data["valid"] is False
+    assert result.data["correction_allowed"] is correction_allowed
+    assert "weights must total 100" in result.data["issues"][0]["message"]
