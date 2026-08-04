@@ -2,6 +2,7 @@ import errno
 import os
 import re
 import stat
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -28,6 +29,14 @@ class CampaignSelectionError(LearnerRepositoryError):
 
 class CampaignAlreadyExistsError(LearnerRepositoryError):
     """Create-only persistence found an existing campaign state."""
+
+
+class CampaignRevisionConflict(LearnerRepositoryError):
+    """A compare-and-swap expected an older campaign revision."""
+
+    def __init__(self, current: CampaignState):
+        self.current = current
+        super().__init__(f"revision conflict; current revision is {current.revision}")
 
 
 @dataclass(frozen=True)
@@ -73,6 +82,8 @@ _DIRECTORY_FLAGS = (
 )
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
 _MISSING_OR_UNSAFE = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
+_MUTATION_LOCKS: dict[tuple[str, str, str], threading.Lock] = {}
+_MUTATION_LOCKS_GUARD = threading.Lock()
 
 
 def _open_directory(directory_fd: int, name: str) -> int | None:
@@ -192,6 +203,74 @@ def save_learner_campaign(
     finally:
         os.close(root_fd)
     return path
+
+
+def mutate_learner_campaign(
+    root: Path, learner_id: str, campaign_id: str, expected_revision: int,
+    transform, *, idempotent_if=None,
+) -> CampaignState:
+    """Descriptor-confined CAS; POSIX uses an advisory per-campaign file lock."""
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise LearnerRepositoryError("expected_revision must be a nonnegative integer")
+    canonical = normalize_learner_id(learner_id)
+    campaign_id = _safe_id(campaign_id, "campaign_id")
+    root_fd = _open_root(root, create=False)
+    if root_fd is None:
+        raise CampaignSelectionError("campaign does not exist")
+    try:
+        learner_fd = _open_directory(root_fd, canonical)
+        if learner_fd is None:
+            raise CampaignSelectionError("campaign does not exist")
+        try:
+            campaign_fd = _open_directory(learner_fd, campaign_id)
+            if campaign_fd is None:
+                raise CampaignSelectionError("campaign does not exist")
+            try:
+                flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                lock_fd = os.open(".state.lock", flags, 0o600, dir_fd=campaign_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                        raise LearnerRepositoryError("campaign lock is not a regular file")
+                    try:
+                        import fcntl
+                    except ImportError:  # Cross-process locking is POSIX-only.
+                        key = (str(Path(root)), canonical, campaign_id)
+                        with _MUTATION_LOCKS_GUARD:
+                            local_lock = _MUTATION_LOCKS.setdefault(key, threading.Lock())
+                        with local_lock:
+                            current = _load_state(campaign_fd, canonical, campaign_id)
+                            return _mutate_loaded(current, expected_revision, transform, idempotent_if, campaign_fd)
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                    try:
+                        current = _load_state(campaign_fd, canonical, campaign_id)
+                        return _mutate_loaded(current, expected_revision, transform, idempotent_if, campaign_fd)
+                    finally:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(lock_fd)
+            finally:
+                os.close(campaign_fd)
+        finally:
+            os.close(learner_fd)
+    finally:
+        os.close(root_fd)
+
+
+def _mutate_loaded(current, expected_revision, transform, idempotent_if, campaign_fd):
+    if current is None:
+        raise CampaignSelectionError("campaign does not exist")
+    if idempotent_if is not None and idempotent_if(current):
+        return current
+    if current.revision != expected_revision:
+        raise CampaignRevisionConflict(current)
+    updated = transform(current)
+    if not isinstance(updated, CampaignState):
+        raise LearnerRepositoryError("campaign transform must return CampaignState")
+    if updated.campaign.id != current.campaign.id or updated.learner_id != current.learner_id:
+        raise LearnerRepositoryError("campaign transform changed identity")
+    updated = replace(updated, revision=current.revision + 1)
+    save_campaign_state_at(campaign_fd, updated)
+    return updated
 
 
 def _campaign_states(root: Path, learner_id: str) -> tuple[CampaignState, ...]:
