@@ -538,7 +538,7 @@ def test_argparse_invocation_errors_return_exactly_one_json_envelope(
     assert completed.stderr == ""
 
 
-def test_command_boundary_exposes_exactly_the_five_foundation_commands():
+def test_command_boundary_exposes_exactly_fifteen_commands():
     assert tuple(cli.COMMANDS) == (
         "setup",
         "list-campaigns",
@@ -549,6 +549,12 @@ def test_command_boundary_exposes_exactly_the_five_foundation_commands():
         "transition-campaign",
         "resume-campaign",
         "complete-campaign",
+        "validate-mission-content",
+        "mission-status",
+        "start-mission",
+        "advance-mission",
+        "adjust-difficulty",
+        "submit-assessment",
     )
 
 
@@ -662,3 +668,15 @@ def test_transition_command_does_not_hide_a_dependency_programmer_fault(
         run_command(
             "transition-campaign", _transition_payload(created.data["campaign_id"]), tmp_path
         )
+
+
+def test_missing_campaign_runtime_smoke(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "langcampaign", "mission-status",
+            "--learners-root", str(tmp_path), "--learner-id", "qasim",
+            "--campaign-id", "missing",
+        ], input="{}", text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["error"]["code"] == "campaign_not_found"
