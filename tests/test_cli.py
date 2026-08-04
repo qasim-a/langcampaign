@@ -3,11 +3,14 @@ import io
 import os
 import subprocess
 import sys
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 import langcampaign.cli as cli
+from langcampaign.assessment import AssessmentEvidence
 from langcampaign.cli import run_command
 from langcampaign.learners import save_learner_campaign, select_campaign
 from langcampaign.storage import CampaignState
@@ -51,6 +54,77 @@ def test_setup_first_mission_uses_active_phase_priority_not_payload_order(tmp_pa
     assert result.success is True
     assert result.data["first_mission_id"] == "hotel-check-in"
     assert result.data["next_priorities"] == ["Check in", "Explain a delayed arrival"]
+
+
+def test_setup_places_a_supporting_prerequisite_before_its_critical_dependent(tmp_path):
+    payload = setup_payload()
+    prerequisite = payload["mission_plans"][0]
+    prerequisite["id"] = "supporting-prerequisite"
+    prerequisite["title"] = "Handle a supporting exchange"
+    prerequisite["priority"] = "supporting"
+    dependent = {
+        **prerequisite,
+        "id": "critical-dependent",
+        "title": "Handle the critical exchange",
+        "priority": "critical",
+        "prerequisite_ids": ["supporting-prerequisite"],
+    }
+    payload["campaign"]["missions"] = [
+        {"id": "supporting-prerequisite", "title": prerequisite["title"]},
+        {"id": "critical-dependent", "title": dependent["title"]},
+    ]
+    payload["mission_plans"] = [prerequisite, dependent]
+    payload["roadmap"]["phases"][0]["mission_ids"] = [
+        "critical-dependent",
+        "supporting-prerequisite",
+    ]
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.to_dict()["data"]["first_mission_id"] == "supporting-prerequisite"
+    assert result.to_dict()["data"]["next_priorities"] == [
+        "Handle a supporting exchange",
+        "Handle the critical exchange",
+    ]
+
+
+@pytest.mark.parametrize("invalid_roadmap", ("omitted-plan", "later-prerequisite"))
+def test_setup_rejects_invalid_roadmap_coverage_or_phase_placement(
+    tmp_path, invalid_roadmap
+):
+    payload = setup_payload()
+    prerequisite = payload["mission_plans"][0]
+    prerequisite["id"] = "supporting-prerequisite"
+    prerequisite["priority"] = "supporting"
+    dependent = {
+        **prerequisite,
+        "id": "critical-dependent",
+        "title": "Handle the critical exchange",
+        "priority": "critical",
+        "prerequisite_ids": ["supporting-prerequisite"],
+    }
+    payload["campaign"]["missions"] = [
+        {"id": "supporting-prerequisite", "title": prerequisite["title"]},
+        {"id": "critical-dependent", "title": dependent["title"]},
+    ]
+    payload["mission_plans"] = [prerequisite, dependent]
+    payload["roadmap"]["phases"][0]["mission_ids"] = ["critical-dependent"]
+    if invalid_roadmap == "later-prerequisite":
+        payload["roadmap"]["phases"].append(
+            {
+                "id": "later-support",
+                "title": "Later support",
+                "capability_summary": "Build prerequisite support.",
+                "mission_ids": ["supporting-prerequisite"],
+                "planned_review_after": False,
+                "planned_simulation_after": False,
+            }
+        )
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.success is False
+    assert list(tmp_path.rglob("state.json")) == []
 
 
 def test_invalid_setup_leaves_no_partial_state(tmp_path):
@@ -221,6 +295,69 @@ def test_run_command_does_not_hide_a_handler_programmer_error(
         run_command("list-campaigns", {"learner_id": "Qasim Ali"}, tmp_path)
 
 
+def test_setup_does_not_hide_a_save_dependency_value_error(tmp_path, monkeypatch):
+    def broken_save(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("save programmer fault")
+
+    monkeypatch.setattr(cli, "save_learner_campaign", broken_save)
+
+    with pytest.raises(ValueError, match="save programmer fault"):
+        run_command("setup", setup_payload(), tmp_path)
+
+
+def test_list_does_not_hide_a_repository_dependency_value_error(tmp_path, monkeypatch):
+    def broken_list(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("list programmer fault")
+
+    monkeypatch.setattr(cli, "list_learner_campaigns", broken_list)
+
+    with pytest.raises(ValueError, match="list programmer fault"):
+        run_command("list-campaigns", {"learner_id": "Qasim Ali"}, tmp_path)
+
+
+def test_selection_does_not_hide_a_repository_dependency_value_error(
+    tmp_path, monkeypatch
+):
+    def broken_select(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("select programmer fault")
+
+    monkeypatch.setattr(cli, "select_campaign", broken_select)
+
+    with pytest.raises(ValueError, match="select programmer fault"):
+        run_command("validate-state", {"learner_id": "Qasim Ali"}, tmp_path)
+
+
+def test_setup_is_create_only_and_preserves_existing_state_and_evidence(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["id"] = "hotel-arrival"
+    created = run_command("setup", payload, tmp_path)
+    original = select_campaign(tmp_path, "Qasim Ali", "hotel-arrival")
+    evidence = AssessmentEvidence(
+        "delayed-arrival",
+        91,
+        True,
+        "written_interaction",
+        datetime(2026, 8, 3, tzinfo=timezone.utc),
+        "A2",
+    )
+    with_evidence = replace(original, assessment_evidence=(evidence,))
+    path = save_learner_campaign(tmp_path, with_evidence)
+    original_bytes = path.read_bytes()
+
+    duplicate = run_command("setup", payload, tmp_path)
+
+    assert created.success is True
+    assert duplicate.to_dict() == {
+        "success": False,
+        "error": "campaign already exists",
+    }
+    assert path.read_bytes() == original_bytes
+    assert select_campaign(tmp_path, "Qasim Ali", "hotel-arrival") == with_evidence
+
+
 def test_module_entrypoint_returns_json_envelope(tmp_path):
     completed = subprocess.run(
         [sys.executable, "-m", "langcampaign", "setup", "--learners-root", str(tmp_path)],
@@ -297,3 +434,43 @@ def test_main_does_not_hide_a_handler_value_error(tmp_path, monkeypatch):
         cli.main(
             ["list-campaigns", "--learners-root", str(tmp_path)]
         )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["unknown", "--learners-root", "ROOT"],
+        ["list-campaigns"],
+        ["list-campaigns", "--learners-root"],
+        ["list-campaigns", "--learners-root", "ROOT", "--unknown-option"],
+    ],
+)
+def test_argparse_invocation_errors_return_exactly_one_json_envelope(
+    tmp_path, arguments
+):
+    resolved = [str(tmp_path) if item == "ROOT" else item for item in arguments]
+    completed = subprocess.run(
+        [sys.executable, "-m", "langcampaign", *resolved],
+        input="{}",
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_module_environment(),
+    )
+
+    envelope = json.loads(completed.stdout)
+    assert completed.returncode == 2
+    assert envelope["success"] is False
+    assert envelope["error"]
+    assert completed.stdout.count("\n") == 1
+    assert completed.stderr == ""
+
+
+def test_command_boundary_exposes_exactly_the_five_foundation_commands():
+    assert tuple(cli.COMMANDS) == (
+        "setup",
+        "list-campaigns",
+        "validate-state",
+        "validate-mission-map",
+        "show-roadmap",
+    )

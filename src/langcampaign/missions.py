@@ -99,6 +99,15 @@ class MissionPlan:
 def validate_mission_map(
     plans: tuple[MissionPlan, ...], readiness_ids: tuple[str, ...]
 ) -> None:
+    _require_tuple(plans, "plans")
+    _require_tuple(readiness_ids, "readiness_ids")
+    for plan in plans:
+        if not isinstance(plan, MissionPlan):
+            raise ValueError("plan must be a MissionPlan")
+    for readiness_id in readiness_ids:
+        if not isinstance(readiness_id, str) or not readiness_id.strip():
+            raise ValueError("readiness id must be a non-empty string")
+
     plan_ids = tuple(plan.id for plan in plans)
     if len(plan_ids) != len(set(plan_ids)):
         raise ValueError("mission plan ids must be unique")

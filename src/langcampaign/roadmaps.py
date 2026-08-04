@@ -87,6 +87,22 @@ def validate_roadmap(
         raise ValueError("roadmap mission ids must exist")
     if len(roadmap_ids) != len(set(roadmap_ids)):
         raise ValueError("roadmap mission ids must be unique across phases")
+    if set(roadmap_ids) != set(plan_ids) or len(roadmap_ids) != len(plan_ids):
+        raise ValueError("roadmap must contain every mission plan exactly once")
+
+    phase_by_mission = {
+        mission_id: phase_index
+        for phase_index, phase in enumerate(roadmap.phases)
+        for mission_id in phase.mission_ids
+    }
+    for plan in plans:
+        for prerequisite_id in plan.prerequisite_ids:
+            if prerequisite_id not in phase_by_mission:
+                raise ValueError("mission prerequisite does not exist")
+            if phase_by_mission[prerequisite_id] > phase_by_mission[plan.id]:
+                raise ValueError(
+                    "mission prerequisites must not be in later phases"
+                )
 
 
 def _require_count(count: object) -> int:
@@ -110,10 +126,38 @@ def next_priority_ids(
         MissionPriority.SUPPORTING: 1,
         MissionPriority.ENRICHMENT: 2,
     }
-    ordered_ids = sorted(
-        active.mission_ids,
-        key=lambda mission_id: priority_order[by_id[mission_id].priority],
-    )
+    declared_order = {
+        mission_id: index for index, mission_id in enumerate(active.mission_ids)
+    }
+    active_phase_index = roadmap.phases.index(active)
+    satisfied = {
+        mission_id
+        for phase in roadmap.phases[:active_phase_index]
+        for mission_id in phase.mission_ids
+    }
+    remaining = list(active.mission_ids)
+    ordered_ids = []
+    while remaining:
+        available = [
+            mission_id
+            for mission_id in remaining
+            if all(
+                prerequisite_id in satisfied
+                for prerequisite_id in by_id[mission_id].prerequisite_ids
+            )
+        ]
+        if not available:
+            raise ValueError("active roadmap prerequisites must be acyclic")
+        mission_id = min(
+            available,
+            key=lambda item: (
+                priority_order[by_id[item].priority],
+                declared_order[item],
+            ),
+        )
+        ordered_ids.append(mission_id)
+        satisfied.add(mission_id)
+        remaining.remove(mission_id)
     return tuple(ordered_ids[:count])
 
 

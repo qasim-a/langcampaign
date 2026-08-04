@@ -1,5 +1,6 @@
 import pytest
 
+from langcampaign.missions import MissionPriority
 from langcampaign.roadmaps import (
     CampaignRoadmap,
     RoadmapPhase,
@@ -8,7 +9,7 @@ from langcampaign.roadmaps import (
     render_roadmap_summary,
     validate_roadmap,
 )
-from tests.fixtures import plans, roadmap
+from tests.fixtures import delayed_arrival, plans, roadmap
 
 
 def test_roadmap_is_valid_and_exposes_only_next_three_priorities():
@@ -123,3 +124,95 @@ def test_priority_queries_validate_roadmap_and_count_instead_of_lookup_failures(
         next_priority_ids(invalid, plans())
     with pytest.raises(ValueError, match="count must be a nonnegative integer"):
         next_priorities(roadmap(), plans(), count=-1)
+
+
+def test_roadmap_requires_every_plan_exactly_once():
+    omitted = CampaignRoadmap(
+        (
+            RoadmapPhase(
+                "core",
+                "Core",
+                "Handle core exchanges.",
+                ("delayed-arrival", "hotel-check-in"),
+                False,
+                False,
+            ),
+        ),
+        "core",
+        (),
+    )
+
+    with pytest.raises(ValueError, match="exactly once"):
+        validate_roadmap(omitted, plans())
+
+
+def test_roadmap_rejects_a_prerequisite_in_a_later_phase():
+    prerequisite = delayed_arrival(
+        id="supporting-prerequisite",
+        title="Handle a supporting exchange",
+        priority=MissionPriority.SUPPORTING,
+    )
+    dependent = delayed_arrival(
+        id="critical-dependent",
+        title="Handle the critical exchange",
+        prerequisite_ids=("supporting-prerequisite",),
+    )
+    misplaced = CampaignRoadmap(
+        (
+            RoadmapPhase(
+                "critical",
+                "Critical",
+                "Handle the critical exchange.",
+                ("critical-dependent",),
+                False,
+                False,
+            ),
+            RoadmapPhase(
+                "support",
+                "Support",
+                "Build prerequisite support.",
+                ("supporting-prerequisite",),
+                False,
+                False,
+            ),
+        ),
+        "critical",
+        (),
+    )
+
+    with pytest.raises(
+        ValueError, match="prerequisites must not be in later phases"
+    ):
+        validate_roadmap(misplaced, (prerequisite, dependent))
+
+
+def test_active_phase_priorities_are_stably_topological_before_priority_ranking():
+    prerequisite = delayed_arrival(
+        id="supporting-prerequisite",
+        title="Handle a supporting exchange",
+        priority=MissionPriority.SUPPORTING,
+    )
+    dependent = delayed_arrival(
+        id="critical-dependent",
+        title="Handle the critical exchange",
+        prerequisite_ids=("supporting-prerequisite",),
+    )
+    current = CampaignRoadmap(
+        (
+            RoadmapPhase(
+                "core",
+                "Core",
+                "Handle linked exchanges.",
+                ("critical-dependent", "supporting-prerequisite"),
+                False,
+                False,
+            ),
+        ),
+        "core",
+        (),
+    )
+
+    assert next_priority_ids(current, (prerequisite, dependent)) == (
+        "supporting-prerequisite",
+        "critical-dependent",
+    )

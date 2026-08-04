@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .learners import (
+    LearnerRepositoryError,
     list_learner_campaigns,
     normalize_learner_id,
     save_learner_campaign,
@@ -24,7 +25,12 @@ from .models import (
     Mission,
 )
 from .roadmaps import next_priority_ids, render_roadmap_summary, validate_roadmap
-from .storage import CampaignState, mission_plan_from_dict, roadmap_from_dict
+from .storage import (
+    CampaignState,
+    CampaignStorageError,
+    mission_plan_from_dict,
+    roadmap_from_dict,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,13 @@ def _input_error(error: ValueError) -> CommandInputError:
     return CommandInputError(
         str(error).replace("MissionPriority", "mission priority")
     )
+
+
+class _CommandArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        envelope = CommandResult(False, error=message)
+        print(json.dumps(envelope.to_dict(), ensure_ascii=False))
+        raise SystemExit(2)
 
 
 def _field(data: dict, name: str) -> object:
@@ -174,6 +187,12 @@ def _setup(payload: dict, learners_root: Path) -> dict:
         for item in _array(_field(payload, "mission_plans"), "mission_plans")
     )
     roadmap = _roadmap_from_input(_field(payload, "roadmap"))
+    active_phase = next(
+        (phase for phase in roadmap.phases if phase.id == roadmap.active_phase_id),
+        None,
+    )
+    if active_phase is not None and not active_phase.mission_ids:
+        raise CommandInputError("active roadmap phase has no missions")
     try:
         validate_mission_map(
             mission_plans, tuple(mission.id for mission in campaign.missions)
@@ -187,16 +206,23 @@ def _setup(payload: dict, learners_root: Path) -> dict:
     plan_by_id = {plan.id: plan for plan in mission_plans}
     priorities = [plan_by_id[mission_id].title for mission_id in priority_ids]
     try:
+        learner_id = normalize_learner_id(
+            _string(_field(payload, "learner_id"), "learner_id")
+        )
+    except LearnerRepositoryError as error:
+        raise _input_error(error) from error
+    try:
         state = CampaignState(
             campaign=campaign,
-            learner_id=normalize_learner_id(
-                _string(_field(payload, "learner_id"), "learner_id")
-            ),
+            learner_id=learner_id,
             mission_plans=mission_plans,
             roadmap=roadmap,
         )
-        save_learner_campaign(learners_root, state)
     except ValueError as error:
+        raise _input_error(error) from error
+    try:
+        save_learner_campaign(learners_root, state, create_only=True)
+    except LearnerRepositoryError as error:
         raise _input_error(error) from error
     return {
         "learner_id": state.learner_id,
@@ -207,25 +233,24 @@ def _setup(payload: dict, learners_root: Path) -> dict:
 
 
 def _list_campaigns(payload: dict, learners_root: Path) -> dict:
+    learner_id = _string(_field(payload, "learner_id"), "learner_id")
     try:
-        entries = list_learner_campaigns(
-            learners_root,
-            _string(_field(payload, "learner_id"), "learner_id"),
-        )
-    except ValueError as error:
+        entries = list_learner_campaigns(learners_root, learner_id)
+    except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
     return {"campaigns": [{"id": item[0], "goal": item[1]} for item in entries]}
 
 
 def _selected_state(payload: dict, learners_root: Path) -> CampaignState:
     campaign_id = _optional_string(payload, "campaign_id")
+    learner_id = _string(_field(payload, "learner_id"), "learner_id")
     try:
         return select_campaign(
             learners_root,
-            _string(_field(payload, "learner_id"), "learner_id"),
+            learner_id,
             campaign_id,
         )
-    except ValueError as error:
+    except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
 
 
@@ -283,7 +308,7 @@ def run_command(command: str, payload: dict, learners_root: Path) -> CommandResu
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="langcampaign")
+    parser = _CommandArgumentParser(prog="langcampaign")
     parser.add_argument("command", choices=tuple(COMMANDS))
     parser.add_argument("--learners-root", type=Path, required=True)
     parser.add_argument("--learner-id")

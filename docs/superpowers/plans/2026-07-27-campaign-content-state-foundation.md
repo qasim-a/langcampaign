@@ -10,12 +10,18 @@
 
 ## Delivery decomposition
 
-This is plan 1 of 4 for the approved Codex vertical slice:
+This completed foundation is plan 1 of 4 for the approved lean Codex vertical
+slice:
 
 1. **This plan:** campaign content, roadmap, learner state, and command foundation.
-2. **Next:** deterministic planner, setup interview output, campaign brief, and roadmap adaptation.
-3. **Then:** rubric assessment, review scheduling, teaching-session transactions, and simulations.
-4. **Finally:** six Codex skills, bootstrap/health check, transcript fixtures, and operational README.
+2. **Next:** campaign lifecycle and fast setup with silent defaults,
+   prior-knowledge context, active/paused/completed state, and resumable
+   transitions.
+3. **Then:** lean mission runtime with small-batch generation, guided practice,
+   no-hints checks, evidence capture, simple difficulty adjustment, and compact
+   progress.
+4. **Finally:** Codex delivery and evaluation with an installable workflow,
+   end-to-end learner fixtures, latency checks, and product hardening.
 
 Each plan produces independently usable and tested software. Claude and other adapters remain outside this vertical slice.
 
@@ -1433,7 +1439,8 @@ git commit -m "docs: describe campaign content foundation"
 
 ## Follow-on plan contracts
 
-The next plan may rely on these stable interfaces:
+The completed foundation contract remains available to the approved campaign
+lifecycle/setup, lean runtime, and Codex delivery/evaluation plans:
 
 - Validated `MissionPlan` tuples keyed one-to-one to `Campaign.missions`.
 - A persisted `CampaignRoadmap` with a single active phase.
@@ -1442,3 +1449,9 @@ The next plan may rely on these stable interfaces:
 - Schema-version 3 `CampaignState` with learner identity, content, roadmap, and evidence.
 - Repository-local learner selection that never guesses between campaigns.
 - Stable JSON command envelopes and atomic setup transactions.
+
+The next lifecycle/setup plan adds fixed defaults, prior-knowledge context,
+active/paused/completed state, and resumable new-goal transitions without
+rewriting this completed foundation contract. The lean runtime and Codex
+delivery/evaluation plans then build on those lifecycle interfaces in the
+approved sequence.

@@ -23,8 +23,10 @@ def test_targeted_campaign_flow(tmp_path):
         "CampaignRoadmap",
         "Campaign",
         "CampaignState",
+        "CampaignStorageError",
         "CampaignType",
         "CoachingStyle",
+        "CommandResult",
         "CurriculumScope",
         "MissionPlan",
         "MissionPriority",
@@ -37,11 +39,13 @@ def test_targeted_campaign_flow(tmp_path):
         "new_campaign",
         "render_progress",
         "revise_campaign",
+        "run_command",
         "save_campaign",
         "save_campaign_state",
         "summarize_cefr",
     }
     public_api = (
+        langcampaign.CommandResult,
         langcampaign.new_campaign,
         langcampaign.revise_campaign,
         langcampaign.calculate_readiness,
@@ -51,10 +55,12 @@ def test_targeted_campaign_flow(tmp_path):
         langcampaign.load_campaign,
         langcampaign.load_campaign_state,
         langcampaign.render_progress,
+        langcampaign.run_command,
         langcampaign.save_campaign_state,
     )
     assert expected_exports <= set(langcampaign.__all__)
     assert all(callable(entry) for entry in public_api)
+    assert issubclass(langcampaign.CampaignStorageError, ValueError)
 
     campaign = new_campaign(
         "Handle a hotel stay",

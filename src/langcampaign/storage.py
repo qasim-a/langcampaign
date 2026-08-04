@@ -355,6 +355,45 @@ def save_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
                 pass
 
 
+def create_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
+    """Create state inside an open directory without replacing any entry."""
+    temporary = f".state.json.{secrets.token_hex(16)}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            json.dump(_campaign_state_payload(state), stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(
+            temporary,
+            "state.json",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        if os.name == "posix":
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                # Some POSIX filesystems do not support directory fsync.
+                pass
+
+
 def _read_envelope_text(text: str) -> dict:
     try:
         payload = json.loads(text)

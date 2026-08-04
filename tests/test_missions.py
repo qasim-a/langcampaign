@@ -92,3 +92,24 @@ def test_mission_map_rejects_missing_and_circular_prerequisites():
         validate_mission_map(
             (first, second), ("delayed-arrival", "hotel-check-in")
         )
+
+
+@pytest.mark.parametrize(
+    ("plans", "readiness_ids", "message"),
+    [
+        ([], ("delayed-arrival",), "plans must be a tuple"),
+        ((object(),), ("delayed-arrival",), "plan must be a MissionPlan"),
+        (
+            (delayed_arrival(),),
+            ["delayed-arrival"],
+            "readiness_ids must be a tuple",
+        ),
+        ((delayed_arrival(),), ("",), "readiness id must be a non-empty string"),
+        ((delayed_arrival(),), (1,), "readiness id must be a non-empty string"),
+    ],
+)
+def test_mission_map_rejects_invalid_public_aggregate_inputs(
+    plans, readiness_ids, message
+):
+    with pytest.raises(ValueError, match=message):
+        validate_mission_map(plans, readiness_ids)

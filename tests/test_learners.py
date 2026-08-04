@@ -1,10 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
 import langcampaign.learners as learners
 from langcampaign.learners import (
+    CampaignAlreadyExistsError,
+    CampaignSelectionError,
     campaign_state_path,
     list_learner_campaigns,
     normalize_learner_id,
@@ -80,7 +84,7 @@ def test_selection_never_guesses_between_multiple_campaigns(tmp_path):
     save_learner_campaign(tmp_path, state("Text friends"))
     save_learner_campaign(tmp_path, state("Read social media"))
 
-    with pytest.raises(ValueError, match="campaign selection is ambiguous"):
+    with pytest.raises(CampaignSelectionError, match="campaign selection is ambiguous"):
         select_campaign(tmp_path, "Qasim Ali")
 
 
@@ -212,3 +216,31 @@ def test_saving_does_not_write_outside_after_a_campaign_directory_swap(
 
     assert not (outside / "state.json").exists()
     assert (detached / "state.json").exists()
+
+
+def test_create_only_save_allows_exactly_one_concurrent_creator(tmp_path):
+    first = state("First goal")
+    second = state("Second goal")
+    second = replace(
+        second,
+        campaign=replace(second.campaign, id=first.campaign.id),
+    )
+    barrier = Barrier(2)
+
+    def create(campaign_state):
+        barrier.wait()
+        try:
+            return save_learner_campaign(tmp_path, campaign_state, create_only=True)
+        except CampaignAlreadyExistsError as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(create, (first, second)))
+
+    assert sum(isinstance(result, Path) for result in results) == 1
+    assert (
+        sum(isinstance(result, CampaignAlreadyExistsError) for result in results)
+        == 1
+    )
+    assert select_campaign(tmp_path, "Qasim Ali", first.campaign.id) in (first, second)
+    assert list(tmp_path.rglob(".state.json.*.tmp")) == []

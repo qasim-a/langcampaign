@@ -7,17 +7,30 @@ from pathlib import Path
 from .storage import (
     CampaignState,
     CampaignStorageError,
+    create_campaign_state_at,
     load_campaign_state_file,
     save_campaign_state_at,
 )
 
 
+class LearnerRepositoryError(ValueError):
+    """An expected learner-repository failure."""
+
+
+class CampaignSelectionError(LearnerRepositoryError):
+    """A requested learner campaign cannot be selected unambiguously."""
+
+
+class CampaignAlreadyExistsError(LearnerRepositoryError):
+    """Create-only persistence found an existing campaign state."""
+
+
 def normalize_learner_id(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("learner_id must be a string")
+        raise LearnerRepositoryError("learner_id must be a string")
     normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
     if not normalized:
-        raise ValueError("learner_id must contain letters or numbers")
+        raise LearnerRepositoryError("learner_id must contain letters or numbers")
     return normalized
 
 
@@ -25,7 +38,7 @@ def _safe_id(value: str, name: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._-]*", value
     ):
-        raise ValueError(f"{name} contains unsafe characters")
+        raise LearnerRepositoryError(f"{name} contains unsafe characters")
     return value
 
 
@@ -77,7 +90,7 @@ def _open_or_create_directory(parent_fd: int, name: str, error: str) -> int:
         pass
     descriptor = _open_directory(parent_fd, name)
     if descriptor is None:
-        raise ValueError(error)
+        raise LearnerRepositoryError(error)
     return descriptor
 
 
@@ -120,12 +133,14 @@ def campaign_state_path(root: Path, learner_id: str, campaign_id: str) -> Path:
     )
 
 
-def save_learner_campaign(root: Path, state: CampaignState) -> Path:
+def save_learner_campaign(
+    root: Path, state: CampaignState, *, create_only: bool = False
+) -> Path:
     path = campaign_state_path(root, state.learner_id, state.campaign.id)
     learner_id = normalize_learner_id(state.learner_id)
     root_fd = _open_root(root, create=True)
     if root_fd is None:
-        raise ValueError("learner root does not exist")
+        raise LearnerRepositoryError("learner root does not exist")
     try:
         learner_fd = _open_or_create_directory(
             root_fd, learner_id, "learner directory is not a directory"
@@ -137,7 +152,15 @@ def save_learner_campaign(root: Path, state: CampaignState) -> Path:
                 "campaign directory is not a directory",
             )
             try:
-                save_campaign_state_at(campaign_fd, state)
+                if create_only:
+                    try:
+                        create_campaign_state_at(campaign_fd, state)
+                    except FileExistsError as error:
+                        raise CampaignAlreadyExistsError(
+                            "campaign already exists"
+                        ) from error
+                else:
+                    save_campaign_state_at(campaign_fd, state)
             finally:
                 os.close(campaign_fd)
         finally:
@@ -196,15 +219,15 @@ def select_campaign(
         campaign_id = _safe_id(campaign_id, "campaign_id")
         root_fd = _open_root(root, create=False)
         if root_fd is None:
-            raise ValueError("campaign does not exist")
+            raise CampaignSelectionError("campaign does not exist")
         try:
             learner_fd = _open_directory(root_fd, canonical_learner_id)
             if learner_fd is None:
-                raise ValueError("campaign does not exist")
+                raise CampaignSelectionError("campaign does not exist")
             try:
                 campaign_fd = _open_directory(learner_fd, campaign_id)
                 if campaign_fd is None:
-                    raise ValueError("campaign does not exist")
+                    raise CampaignSelectionError("campaign does not exist")
                 try:
                     state = _load_state(
                         campaign_fd, canonical_learner_id, campaign_id
@@ -216,11 +239,11 @@ def select_campaign(
         finally:
             os.close(root_fd)
         if state is None:
-            raise ValueError("campaign does not exist")
+            raise CampaignSelectionError("campaign does not exist")
         return state
     available = _campaign_states(root, learner_id)
     if not available:
-        raise ValueError("learner has no campaigns")
+        raise CampaignSelectionError("learner has no campaigns")
     if len(available) > 1:
-        raise ValueError("campaign selection is ambiguous")
+        raise CampaignSelectionError("campaign selection is ambiguous")
     return available[0]
