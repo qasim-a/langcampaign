@@ -27,17 +27,32 @@ from .models import (
     _require_non_empty_string,
 )
 from .roadmaps import CampaignRoadmap, RoadmapPhase, validate_roadmap
+from .runtime import (
+    ActiveMissionSession,
+    AttemptKind,
+    CriterionScore,
+    DifficultyAdjustment,
+    MissionAttemptRecord,
+    MissionCheckpoint,
+    MissionContent,
+    MissionOutcome,
+    NextAction,
+    NextActionType,
+    RubricCriterion,
+)
 
 
 SCHEMA_VERSION = 1
 CAMPAIGN_STATE_SCHEMA_VERSION = 2
 CAMPAIGN_CONTENT_SCHEMA_VERSION = 3
 CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION = 4
+CAMPAIGN_RUNTIME_SCHEMA_VERSION = 5
 SUPPORTED_SCHEMA_VERSIONS = (
     SCHEMA_VERSION,
     CAMPAIGN_STATE_SCHEMA_VERSION,
     CAMPAIGN_CONTENT_SCHEMA_VERSION,
     CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+    CAMPAIGN_RUNTIME_SCHEMA_VERSION,
 )
 
 
@@ -122,6 +137,10 @@ class CampaignState:
     mission_plans: tuple[MissionPlan, ...] = ()
     roadmap: CampaignRoadmap | None = None
     prior_knowledge: str = ""
+    revision: int = 0
+    active_session: ActiveMissionSession | None = None
+    mission_attempts: tuple[MissionAttemptRecord, ...] = ()
+    completed_review_phase_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.campaign, Campaign):
@@ -133,6 +152,12 @@ class CampaignState:
         _require_non_empty_string(self.learner_id, "learner_id")
         if type(self.prior_knowledge) is not str:
             raise ValueError("prior_knowledge must be a string")
+        if type(self.revision) is not int or self.revision < 0:
+            raise ValueError("revision must be a nonnegative integer")
+        if type(self.mission_attempts) is not tuple:
+            raise ValueError("mission_attempts must be a tuple")
+        if type(self.completed_review_phase_ids) is not tuple:
+            raise ValueError("completed_review_phase_ids must be a tuple")
         readiness_ids = tuple(mission.id for mission in self.campaign.missions)
         for item in self.assessment_evidence:
             if not isinstance(item, AssessmentEvidence):
@@ -149,6 +174,59 @@ class CampaignState:
             if not self.mission_plans:
                 raise ValueError("roadmap requires mission plans")
             validate_roadmap(self.roadmap, self.mission_plans)
+        mission_ids = set(readiness_ids)
+        if self.active_session is not None:
+            if not isinstance(self.active_session, ActiveMissionSession):
+                raise ValueError("active_session must be an ActiveMissionSession or None")
+            if self.active_session.mission_id not in mission_ids:
+                raise ValueError("active_session must reference a campaign mission")
+        identities = set()
+        for attempt in self.mission_attempts:
+            if not isinstance(attempt, MissionAttemptRecord):
+                raise ValueError("mission_attempts must contain MissionAttemptRecord")
+            if attempt.mission_id not in mission_ids:
+                raise ValueError("mission_attempt must reference a campaign mission")
+            identity = (attempt.mission_id, attempt.attempt_number)
+            if identity in identities:
+                raise ValueError("mission attempt identities must be unique")
+            identities.add(identity)
+            if not any(
+                evidence.mission_id == attempt.mission_id
+                and evidence.score == attempt.score
+                and evidence.modality == attempt.modality
+                and evidence.assessed_at == attempt.assessed_at
+                for evidence in self.assessment_evidence
+            ):
+                raise ValueError("mission attempts require matching assessment evidence")
+        if self.active_session is not None:
+            completed = [item.attempt_number for item in self.mission_attempts if item.mission_id == self.active_session.mission_id]
+            if completed and self.active_session.attempt_number <= max(completed):
+                matching = any(
+                    item.mission_id == self.active_session.mission_id
+                    and item.attempt_number == self.active_session.attempt_number
+                    for item in self.mission_attempts
+                )
+                if not (self.active_session.checkpoint is MissionCheckpoint.ASSESSED and matching):
+                    raise ValueError("active session attempt must follow completed attempts")
+            if self.active_session.checkpoint is MissionCheckpoint.ASSESSED:
+                matching_attempt = next(
+                    item for item in self.mission_attempts
+                    if item.mission_id == self.active_session.mission_id
+                    and item.attempt_number == self.active_session.attempt_number
+                )
+                if matching_attempt.outcome is not self.active_session.latest_outcome:
+                    raise ValueError("assessed session outcome must match stored attempt")
+        if len(set(self.completed_review_phase_ids)) != len(self.completed_review_phase_ids):
+            raise ValueError("completed_review_phase_ids must be unique")
+        if self.roadmap is None:
+            if self.completed_review_phase_ids:
+                raise ValueError("completed reviews require a roadmap")
+        else:
+            phase_ids = {phase.id for phase in self.roadmap.phases}
+            for phase_id in self.completed_review_phase_ids:
+                _require_non_empty_string(phase_id, "completed review phase id")
+                if phase_id not in phase_ids:
+                    raise ValueError("completed review phase must exist")
 
 
 def campaign_to_dict(campaign: Campaign) -> dict:
@@ -236,6 +314,93 @@ def _assessment_evidence_from_dict(data: dict) -> AssessmentEvidence:
         modality=data["modality"],
         assessed_at=datetime.fromisoformat(data["assessed_at"]),
         cefr=data["cefr"],
+    )
+
+
+def rubric_criterion_to_dict(item: RubricCriterion) -> dict:
+    return {"id": item.id, "description": item.description, "weight": item.weight}
+
+
+def rubric_criterion_from_dict(data: dict) -> RubricCriterion:
+    return RubricCriterion(data["id"], data["description"], data["weight"])
+
+
+def mission_content_to_dict(content: MissionContent) -> dict:
+    return {
+        "generation_id": content.generation_id, "candidate_number": content.candidate_number,
+        "capability": content.capability, "scenario": content.scenario,
+        "teaching_objectives": list(content.teaching_objectives),
+        "essential_language": list(content.essential_language),
+        "guided_prompts": list(content.guided_prompts),
+        "assessment_prompt": content.assessment_prompt,
+        "rubric": [rubric_criterion_to_dict(item) for item in content.rubric],
+    }
+
+
+def mission_content_from_dict(data: dict) -> MissionContent:
+    return MissionContent(
+        data["generation_id"], data["candidate_number"], data["capability"], data["scenario"],
+        tuple(data["teaching_objectives"]), tuple(data["essential_language"]),
+        tuple(data["guided_prompts"]), data["assessment_prompt"],
+        tuple(rubric_criterion_from_dict(item) for item in data["rubric"]),
+    )
+
+
+def criterion_score_to_dict(item: CriterionScore) -> dict:
+    return {"criterion_id": item.criterion_id, "score": item.score}
+
+
+def criterion_score_from_dict(data: dict) -> CriterionScore:
+    return CriterionScore(data["criterion_id"], data["score"])
+
+
+def next_action_to_dict(action: NextAction) -> dict:
+    return {"kind": action.kind.value, "mission_id": action.mission_id, "target_phase_id": action.target_phase_id}
+
+
+def next_action_from_dict(data: dict) -> NextAction:
+    return NextAction(NextActionType(data["kind"]), data.get("mission_id"), data.get("target_phase_id"))
+
+
+def mission_attempt_to_dict(item: MissionAttemptRecord) -> dict:
+    return {
+        "mission_id": item.mission_id, "attempt_number": item.attempt_number, "kind": item.kind.value,
+        "rubric": [rubric_criterion_to_dict(value) for value in item.rubric],
+        "criterion_scores": [criterion_score_to_dict(value) for value in item.criterion_scores],
+        "score": item.score, "outcome": item.outcome.value, "modality": item.modality,
+        "result_statement": item.result_statement, "assessed_at": item.assessed_at.isoformat(),
+    }
+
+
+def mission_attempt_from_dict(data: dict) -> MissionAttemptRecord:
+    return MissionAttemptRecord(
+        data["mission_id"], data["attempt_number"], AttemptKind(data["kind"]),
+        tuple(rubric_criterion_from_dict(item) for item in data["rubric"]),
+        tuple(criterion_score_from_dict(item) for item in data["criterion_scores"]),
+        data["score"], MissionOutcome(data["outcome"]), data["modality"], data["result_statement"],
+        datetime.fromisoformat(data["assessed_at"]),
+    )
+
+
+def active_session_to_dict(session: ActiveMissionSession) -> dict:
+    return {
+        "mission_id": session.mission_id, "attempt_number": session.attempt_number,
+        "kind": session.kind.value, "checkpoint": session.checkpoint.value,
+        "adjustment": session.adjustment.value, "content": mission_content_to_dict(session.content),
+        "latest_outcome": session.latest_outcome.value if session.latest_outcome else None,
+        "next_action": next_action_to_dict(session.next_action) if session.next_action else None,
+        "content_refresh_required": session.content_refresh_required,
+    }
+
+
+def active_session_from_dict(data: dict) -> ActiveMissionSession:
+    return ActiveMissionSession(
+        data["mission_id"], data["attempt_number"], AttemptKind(data["kind"]),
+        MissionCheckpoint(data["checkpoint"]), DifficultyAdjustment(data["adjustment"]),
+        mission_content_from_dict(data["content"]),
+        MissionOutcome(data["latest_outcome"]) if data.get("latest_outcome") is not None else None,
+        next_action_from_dict(data["next_action"]) if data.get("next_action") is not None else None,
+        data["content_refresh_required"],
     )
 
 
@@ -378,7 +543,7 @@ def save_campaign_state(path: Path, state: CampaignState) -> None:
 
 def _campaign_state_payload(state: CampaignState) -> dict:
     return {
-        "schema_version": CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+        "schema_version": CAMPAIGN_RUNTIME_SCHEMA_VERSION,
         "campaign": campaign_to_dict(state.campaign),
         "assessment_evidence": [
             _assessment_evidence_to_dict(item)
@@ -388,6 +553,13 @@ def _campaign_state_payload(state: CampaignState) -> dict:
         "mission_plans": [mission_plan_to_dict(item) for item in state.mission_plans],
         "roadmap": roadmap_to_dict(state.roadmap) if state.roadmap else None,
         "prior_knowledge": state.prior_knowledge,
+        "revision": state.revision,
+        "active_session": (
+            active_session_to_dict(state.active_session)
+            if state.active_session is not None else None
+        ),
+        "mission_attempts": [mission_attempt_to_dict(item) for item in state.mission_attempts],
+        "completed_review_phase_ids": list(state.completed_review_phase_ids),
     }
 
 
@@ -539,6 +711,7 @@ def _read_envelope_text(text: str) -> dict:
             CAMPAIGN_STATE_SCHEMA_VERSION,
             CAMPAIGN_CONTENT_SCHEMA_VERSION,
             CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+            CAMPAIGN_RUNTIME_SCHEMA_VERSION,
         )
         and not isinstance(payload.get("assessment_evidence"), list)
     ):
@@ -548,6 +721,7 @@ def _read_envelope_text(text: str) -> dict:
     if version in (
         CAMPAIGN_CONTENT_SCHEMA_VERSION,
         CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+        CAMPAIGN_RUNTIME_SCHEMA_VERSION,
     ):
         if not isinstance(payload.get("learner_id"), str):
             raise CampaignStorageError(
@@ -563,12 +737,21 @@ def _read_envelope_text(text: str) -> dict:
             raise CampaignStorageError(
                 "invalid campaign storage: roadmap must be an object or null"
             )
-    if version == CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION and not isinstance(
+    if version in (CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION, CAMPAIGN_RUNTIME_SCHEMA_VERSION) and not isinstance(
         payload.get("prior_knowledge"), str
     ):
         raise CampaignStorageError(
             "invalid campaign storage: prior_knowledge must be a string"
         )
+    if version == CAMPAIGN_RUNTIME_SCHEMA_VERSION:
+        if type(payload.get("revision")) is not int or payload["revision"] < 0:
+            raise CampaignStorageError("invalid campaign storage: revision must be a nonnegative integer")
+        if payload.get("active_session") is not None and not isinstance(payload.get("active_session"), dict):
+            raise CampaignStorageError("invalid campaign storage: active_session must be an object or null")
+        if not isinstance(payload.get("mission_attempts"), list):
+            raise CampaignStorageError("invalid campaign storage: mission_attempts must be a list")
+        if not isinstance(payload.get("completed_review_phase_ids"), list):
+            raise CampaignStorageError("invalid campaign storage: completed_review_phase_ids must be a list")
     return payload
 
 
@@ -605,12 +788,14 @@ def _campaign_state_from_payload(payload: dict) -> CampaignState:
                 CAMPAIGN_STATE_SCHEMA_VERSION,
                 CAMPAIGN_CONTENT_SCHEMA_VERSION,
                 CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+                CAMPAIGN_RUNTIME_SCHEMA_VERSION,
             )
             else ()
         )
         if payload["schema_version"] in (
             CAMPAIGN_CONTENT_SCHEMA_VERSION,
             CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
+            CAMPAIGN_RUNTIME_SCHEMA_VERSION,
         ):
             return CampaignState(
                 campaign=campaign,
@@ -625,12 +810,11 @@ def _campaign_state_from_payload(payload: dict) -> CampaignState:
                     if payload["roadmap"] is not None
                     else None
                 ),
-                prior_knowledge=(
-                    payload["prior_knowledge"]
-                    if payload["schema_version"]
-                    == CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION
-                    else ""
-                ),
+                prior_knowledge=(payload["prior_knowledge"] if payload["schema_version"] in (CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION, CAMPAIGN_RUNTIME_SCHEMA_VERSION) else ""),
+                revision=(payload["revision"] if payload["schema_version"] == CAMPAIGN_RUNTIME_SCHEMA_VERSION else 0),
+                active_session=(active_session_from_dict(payload["active_session"]) if payload["schema_version"] == CAMPAIGN_RUNTIME_SCHEMA_VERSION and payload["active_session"] is not None else None),
+                mission_attempts=(tuple(mission_attempt_from_dict(item) for item in payload["mission_attempts"]) if payload["schema_version"] == CAMPAIGN_RUNTIME_SCHEMA_VERSION else ()),
+                completed_review_phase_ids=(tuple(payload["completed_review_phase_ids"]) if payload["schema_version"] == CAMPAIGN_RUNTIME_SCHEMA_VERSION else ()),
             )
         return CampaignState(campaign, evidence)
     except (AttributeError, KeyError, TypeError, ValueError) as error:

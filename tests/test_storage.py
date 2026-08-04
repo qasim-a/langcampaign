@@ -28,6 +28,11 @@ from langcampaign.storage import (
     save_campaign,
     save_campaign_state,
 )
+from langcampaign.runtime import (
+    ActiveMissionSession, AttemptKind, CriterionScore, DifficultyAdjustment,
+    MissionAttemptRecord, MissionCheckpoint, MissionContent, MissionOutcome,
+    RubricCriterion,
+)
 from tests.fixtures import delayed_arrival, roadmap
 
 
@@ -191,7 +196,7 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
     payload = json.loads(path.read_text())
 
     assert loaded == state
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["assessment_evidence"] == [
         {
             "mission_id": "chat",
@@ -245,7 +250,7 @@ def test_version_four_state_round_trips_learner_content_and_roadmap(tmp_path):
     loaded = load_campaign_state(path)
 
     assert loaded == state
-    assert json.loads(path.read_text())["schema_version"] == 4
+    assert json.loads(path.read_text())["schema_version"] == 5
     validate_mission_map(loaded.mission_plans, ("delayed-arrival",))
     validate_roadmap(loaded.roadmap, loaded.mission_plans)
 
@@ -293,7 +298,74 @@ def test_version_four_round_trips_prior_knowledge(tmp_path):
     save_campaign_state(path, state)
 
     assert load_campaign_state(path) == state
-    assert json.loads(path.read_text())["schema_version"] == 4
+    assert json.loads(path.read_text())["schema_version"] == 5
+
+
+def _runtime_content():
+    return MissionContent(
+        "generation-1", 1, "Explain delay", "Hotel arrival", ("Explain",),
+        ("llego tarde",), ("Say it",), "Respond without help",
+        (RubricCriterion("delay", "States delay", 50), RubricCriterion("time", "Gives time", 50)),
+    )
+
+
+def test_version_five_round_trips_runtime_state_and_nested_records(tmp_path):
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions((Mission("reply", "Reply"),))
+    content = _runtime_content()
+    record = MissionAttemptRecord(
+        "reply", 2, AttemptKind.RETRY, content.rubric,
+        (CriterionScore("delay", 80), CriterionScore("time", 100)), 90,
+        MissionOutcome.PASS, "text", "Clear reply", datetime(2026, 8, 4, tzinfo=timezone.utc),
+    )
+    plan = delayed_arrival(id="reply", title="Reply")
+    stored_roadmap = replace(roadmap(), phases=(
+        storage.RoadmapPhase("phase-1", "Phase", "Reply", ("reply",), True, False),
+    ), active_phase_id="phase-1")
+    state = CampaignState(campaign, (AssessmentEvidence("reply", 90, True, "text", record.assessed_at),), "qasim", (plan,), stored_roadmap, "", 7,
+        ActiveMissionSession("reply", 3, AttemptKind.RETRY, MissionCheckpoint.CHECK_READY, DifficultyAdjustment.STANDARD, content),
+        (record,), ("phase-1",))
+    path = tmp_path / "state.json"
+
+    save_campaign_state(path, state)
+    payload = json.loads(path.read_text())
+
+    assert load_campaign_state(path) == state
+    assert payload["schema_version"] == 5
+    assert payload["revision"] == 7
+    assert payload["active_session"]["mission_id"] == "reply"
+    assert payload["active_session"]["attempt_number"] == 3
+    assert payload["mission_attempts"][0]["criterion_scores"] == [{"criterion_id": "delay", "score": 80}, {"criterion_id": "time", "score": 100}]
+    assert payload["completed_review_phase_ids"] == ["phase-1"]
+
+
+@pytest.mark.parametrize("version", (1, 2, 3, 4))
+def test_historical_schemas_load_runtime_defaults_without_rewriting(tmp_path, version):
+    payload = existing_version_two_payload() if version == 2 else existing_version_three_payload() if version == 3 else storage._campaign_state_payload(CampaignState(new_campaign("Text", "Spanish")))
+    payload["schema_version"] = version
+    if version == 1:
+        payload.pop("assessment_evidence", None)
+        payload.pop("learner_id", None)
+        payload.pop("mission_plans", None)
+        payload.pop("roadmap", None)
+        payload.pop("prior_knowledge", None)
+    if version == 2:
+        payload.pop("learner_id", None); payload.pop("mission_plans", None); payload.pop("roadmap", None); payload.pop("prior_knowledge", None)
+    if version == 3:
+        payload.pop("prior_knowledge", None)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(payload))
+    before = path.read_bytes()
+
+    loaded = load_campaign_state(path)
+
+    assert (loaded.revision, loaded.active_session, loaded.mission_attempts, loaded.completed_review_phase_ids) == (0, None, (), ())
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("revision", (True, -1, 1.2))
+def test_campaign_state_rejects_non_integer_nonnegative_revision(revision):
+    with pytest.raises(ValueError, match="revision"):
+        CampaignState(new_campaign("Text", "Spanish"), revision=revision)
 
 
 def test_version_three_migrates_with_empty_prior_knowledge(tmp_path):
