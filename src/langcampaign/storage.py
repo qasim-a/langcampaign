@@ -470,6 +470,45 @@ def create_campaign_state_at(directory_fd: int, state: CampaignState) -> None:
                 pass
 
 
+def save_learner_index_at(directory_fd: int, index: LearnerCampaignIndex) -> None:
+    """Atomically save a learner index inside an already-open directory."""
+    temporary = f".index.json.{secrets.token_hex(16)}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            json.dump(learner_index_to_dict(index), stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary,
+            "index.json",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary = ""
+        if os.name == "posix":
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
 def _read_envelope_text(text: str) -> dict:
     try:
         payload = json.loads(text)
@@ -606,6 +645,18 @@ def load_campaign_state(path: Path) -> CampaignState:
 
 def load_campaign_state_file(stream: TextIO) -> CampaignState:
     return _campaign_state_from_payload(_read_envelope_file(stream))
+
+
+def load_learner_index_file(stream: TextIO) -> LearnerCampaignIndex:
+    try:
+        text = stream.read()
+    except UnicodeDecodeError as error:
+        raise CampaignStorageError("invalid learner index: malformed JSON") from error
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise CampaignStorageError("invalid learner index: malformed JSON") from error
+    return learner_index_from_dict(payload)
 
 
 def load_campaign(path: Path) -> Campaign:
