@@ -17,8 +17,12 @@ from langcampaign.models import (
     new_campaign,
 )
 from langcampaign.storage import (
+    CampaignLifecycle,
     CampaignState,
     CampaignStorageError,
+    LearnerCampaignIndex,
+    learner_index_from_dict,
+    learner_index_to_dict,
     load_campaign,
     load_campaign_state,
     save_campaign,
@@ -187,7 +191,7 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
     payload = json.loads(path.read_text())
 
     assert loaded == state
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["assessment_evidence"] == [
         {
             "mission_id": "chat",
@@ -208,7 +212,7 @@ def test_campaign_state_round_trips_assessment_evidence(tmp_path):
     ]
 
 
-def test_version_three_state_round_trips_learner_content_and_roadmap(tmp_path):
+def test_version_four_state_round_trips_learner_content_and_roadmap(tmp_path):
     from langcampaign.missions import validate_mission_map
     from langcampaign.roadmaps import RoadmapPhase, validate_roadmap
 
@@ -241,7 +245,7 @@ def test_version_three_state_round_trips_learner_content_and_roadmap(tmp_path):
     loaded = load_campaign_state(path)
 
     assert loaded == state
-    assert json.loads(path.read_text())["schema_version"] == 3
+    assert json.loads(path.read_text())["schema_version"] == 4
     validate_mission_map(loaded.mission_plans, ("delayed-arrival",))
     validate_roadmap(loaded.roadmap, loaded.mission_plans)
 
@@ -264,6 +268,97 @@ def existing_version_two_payload():
         "campaign": storage.campaign_to_dict(campaign),
         "assessment_evidence": [],
     }
+
+
+def existing_version_three_payload():
+    campaign = new_campaign("Read social media", "Japanese")
+    return {
+        "schema_version": 3,
+        "campaign": storage.campaign_to_dict(campaign),
+        "assessment_evidence": [],
+        "learner_id": "qasim",
+        "mission_plans": [],
+        "roadmap": None,
+    }
+
+
+def test_version_four_round_trips_prior_knowledge(tmp_path):
+    state = CampaignState(
+        new_campaign("Text friends", "Spanish"),
+        learner_id="qasim",
+        prior_knowledge="Can read casual messages but rarely speaks.",
+    )
+    path = tmp_path / "state.json"
+
+    save_campaign_state(path, state)
+
+    assert load_campaign_state(path) == state
+    assert json.loads(path.read_text())["schema_version"] == 4
+
+
+def test_version_three_migrates_with_empty_prior_knowledge(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(existing_version_three_payload()))
+
+    assert load_campaign_state(path).prior_knowledge == ""
+
+
+@pytest.mark.parametrize("value", (None, 1, [], {}))
+def test_campaign_state_rejects_non_string_prior_knowledge(value):
+    with pytest.raises(ValueError, match="prior_knowledge must be a string"):
+        CampaignState(new_campaign("Text friends", "Spanish"), prior_knowledge=value)
+
+
+def test_learner_index_is_immutable_and_has_one_active_campaign():
+    index = LearnerCampaignIndex("campaign-a", ("campaign-b",))
+
+    assert index.lifecycle_for("campaign-a") is CampaignLifecycle.ACTIVE
+    assert index.lifecycle_for("campaign-b") is CampaignLifecycle.COMPLETED
+    assert index.lifecycle_for("campaign-c") is CampaignLifecycle.PAUSED
+    with pytest.raises(AttributeError):
+        index.active_campaign_id = "campaign-c"
+
+
+@pytest.mark.parametrize(
+    "active_campaign_id, completed_campaign_ids",
+    (
+        (1, ()),
+        ("campaign-a", ["campaign-b"]),
+        ("campaign-a", (1,)),
+        ("campaign-a", ("campaign-b", "campaign-b")),
+        ("campaign-a", ("campaign-a",)),
+    ),
+)
+def test_learner_index_rejects_invalid_identifier_boundaries(
+    active_campaign_id, completed_campaign_ids
+):
+    with pytest.raises(ValueError):
+        LearnerCampaignIndex(active_campaign_id, completed_campaign_ids)
+
+
+def test_learner_index_converts_versioned_payload():
+    index = LearnerCampaignIndex("campaign-a", ("campaign-b",))
+
+    assert learner_index_to_dict(index) == {
+        "schema_version": 1,
+        "active_campaign_id": "campaign-a",
+        "completed_campaign_ids": ["campaign-b"],
+    }
+    assert learner_index_from_dict(learner_index_to_dict(index)) == index
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {},
+        {"schema_version": 2, "active_campaign_id": None, "completed_campaign_ids": []},
+        {"schema_version": 1, "active_campaign_id": [], "completed_campaign_ids": []},
+        {"schema_version": 1, "active_campaign_id": None, "completed_campaign_ids": "x"},
+    ),
+)
+def test_learner_index_rejects_unknown_or_malformed_payload(payload):
+    with pytest.raises(CampaignStorageError):
+        learner_index_from_dict(payload)
 
 
 @pytest.mark.parametrize(

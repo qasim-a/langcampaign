@@ -13,6 +13,7 @@ import langcampaign.cli as cli
 from langcampaign.assessment import AssessmentEvidence
 from langcampaign.cli import run_command
 from langcampaign.learners import save_learner_campaign, select_campaign
+from langcampaign.models import CampaignType, CoachingStyle, CurriculumScope
 from langcampaign.storage import CampaignState
 from tests.fixtures import setup_payload
 
@@ -35,6 +36,56 @@ def test_setup_writes_valid_state_and_returns_next_priorities(tmp_path):
     assert result.data["next_priorities"] == ["Explain a delayed arrival"]
     assert result.data["first_mission_id"] == "delayed-arrival"
     assert list(tmp_path.glob("qasim-ali/*/state.json"))
+
+
+def test_setup_silently_applies_defaults_and_stores_prior_knowledge(tmp_path):
+    payload = setup_payload()
+
+    result = run_command("setup", payload, tmp_path)
+    state = select_campaign(tmp_path, "Qasim Ali", result.data["campaign_id"])
+
+    assert result.success is True
+    assert state.campaign.settings.campaign_type is CampaignType.FLEXIBLE
+    assert state.campaign.settings.curriculum_scope is CurriculumScope.BALANCED
+    assert state.campaign.settings.coaching_style is CoachingStyle.SUPPORTIVE
+    assert state.prior_knowledge == "Can read casual messages but rarely speaks."
+
+
+def test_setup_target_date_alone_selects_a_targeted_campaign(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["target_date"] = "2026-10-01"
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.success is True
+    assert select_campaign(
+        tmp_path, "Qasim Ali", result.data["campaign_id"]
+    ).campaign.settings.campaign_type is CampaignType.TARGETED
+
+
+@pytest.mark.parametrize("value", (None, 0, [], {}))
+def test_setup_rejects_non_string_prior_knowledge(tmp_path, value):
+    payload = setup_payload()
+    payload["prior_knowledge"] = value
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.to_dict() == {
+        "success": False,
+        "error": "prior_knowledge must be a string",
+    }
+
+
+def test_setup_returns_a_json_failure_for_an_invalid_legacy_campaign_type(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["campaign_type"] = "not-a-type"
+
+    result = run_command("setup", payload, tmp_path)
+
+    assert result.to_dict() == {
+        "success": False,
+        "error": "'not-a-type' is not a valid campaign type",
+    }
 
 
 def test_setup_first_mission_uses_active_phase_priority_not_payload_order(tmp_path):
@@ -300,7 +351,7 @@ def test_setup_does_not_hide_a_save_dependency_value_error(tmp_path, monkeypatch
         del args, kwargs
         raise ValueError("save programmer fault")
 
-    monkeypatch.setattr(cli, "save_learner_campaign", broken_save)
+    monkeypatch.setattr(cli, "create_and_activate_campaign", broken_save)
 
     with pytest.raises(ValueError, match="save programmer fault"):
         run_command("setup", setup_payload(), tmp_path)
@@ -370,6 +421,27 @@ def test_module_entrypoint_returns_json_envelope(tmp_path):
     envelope = json.loads(completed.stdout)
     assert completed.returncode == 0
     assert envelope["success"] is True
+    assert completed.stderr == ""
+
+
+def test_module_entrypoint_returns_one_json_envelope_for_invalid_campaign_type(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["campaign_type"] = "not-a-type"
+    completed = subprocess.run(
+        [sys.executable, "-m", "langcampaign", "setup", "--learners-root", str(tmp_path)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_module_environment(),
+    )
+
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout) == {
+        "success": False,
+        "error": "'not-a-type' is not a valid campaign type",
+    }
+    assert completed.stdout.count("\n") == 1
     assert completed.stderr == ""
 
 
@@ -473,4 +545,120 @@ def test_command_boundary_exposes_exactly_the_five_foundation_commands():
         "validate-state",
         "validate-mission-map",
         "show-roadmap",
+        "list-campaign-status",
+        "transition-campaign",
+        "resume-campaign",
+        "complete-campaign",
     )
+
+
+def test_lifecycle_commands_return_their_stable_success_envelopes(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    campaign_id = created.data["campaign_id"]
+
+    statuses = run_command(
+        "list-campaign-status", {"learner_id": "Qasim Ali"}, tmp_path
+    )
+    completed = run_command(
+        "complete-campaign",
+        {"learner_id": "Qasim Ali", "campaign_id": campaign_id},
+        tmp_path,
+    )
+
+    assert statuses.to_dict() == {
+        "success": True,
+        "data": {
+            "campaigns": [
+                {
+                    "id": campaign_id,
+                    "goal": "Handle a delayed hotel arrival",
+                    "status": "active",
+                }
+            ]
+        },
+    }
+    assert completed.to_dict() == {
+        "success": True,
+        "data": {"completed_campaign_id": campaign_id},
+    }
+
+
+def _transition_payload(source_campaign_id, learner_id="Qasim Ali"):
+    payload = setup_payload()
+    payload["learner_id"] = learner_id
+    payload["campaign"]["id"] = "new-campaign"
+    payload["source_campaign_id"] = source_campaign_id
+    payload["evidence_transfers"] = []
+    return payload
+
+
+def test_transition_command_returns_error_envelopes_for_missing_and_invalid_inputs(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    source_campaign_id = created.data["campaign_id"]
+
+    missing = run_command("transition-campaign", setup_payload(), tmp_path)
+    mismatched = run_command(
+        "transition-campaign",
+        _transition_payload(source_campaign_id, "Other Learner"),
+        tmp_path,
+    )
+    duplicate = _transition_payload(source_campaign_id)
+    duplicate["evidence_transfers"] = [
+        {"source_mission_id": "delayed-arrival", "target_mission_id": "delayed-arrival"},
+        {"source_mission_id": "delayed-arrival", "target_mission_id": "delayed-arrival"},
+    ]
+    duplicate_result = run_command("transition-campaign", duplicate, tmp_path)
+    invalid = _transition_payload(source_campaign_id)
+    invalid["evidence_transfers"] = [
+        {"source_mission_id": "missing", "target_mission_id": "delayed-arrival"}
+    ]
+    invalid_result = run_command("transition-campaign", invalid, tmp_path)
+
+    assert missing.success is False
+    assert mismatched.success is False
+    assert duplicate_result.to_dict() == {
+        "success": False,
+        "error": "duplicate source mission mapping",
+    }
+    assert invalid_result.to_dict() == {
+        "success": False,
+        "error": "source mission does not exist",
+    }
+
+
+def test_completed_campaign_cannot_be_resumed_through_the_command_boundary(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    campaign_id = created.data["campaign_id"]
+    run_command(
+        "complete-campaign",
+        {"learner_id": "Qasim Ali", "campaign_id": campaign_id},
+        tmp_path,
+    )
+
+    result = run_command(
+        "resume-campaign",
+        {"learner_id": "Qasim Ali", "campaign_id": campaign_id},
+        tmp_path,
+    )
+
+    assert result.to_dict() == {
+        "success": False,
+        "error": "completed campaigns cannot be activated",
+    }
+
+
+def test_transition_command_does_not_hide_a_dependency_programmer_fault(
+    tmp_path, monkeypatch
+):
+    created = run_command("setup", setup_payload(), tmp_path)
+
+    def broken_transition(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("transition programmer fault")
+
+    monkeypatch.setattr(cli, "transition_campaign", broken_transition)
+
+    with pytest.raises(ValueError, match="transition programmer fault"):
+        run_command(
+            "transition-campaign", _transition_payload(created.data["campaign_id"]), tmp_path
+        )

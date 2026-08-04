@@ -10,10 +10,16 @@ from uuid import uuid4
 
 from .learners import (
     LearnerRepositoryError,
+    EvidenceTransfer,
+    activate_campaign,
+    complete_campaign,
+    create_and_activate_campaign,
     list_learner_campaigns,
+    list_campaign_summaries,
     normalize_learner_id,
-    save_learner_campaign,
+    select_active_campaign,
     select_campaign,
+    transition_campaign,
 )
 from .missions import validate_mission_map
 from .models import (
@@ -54,7 +60,9 @@ class CommandInputError(ValueError):
 
 def _input_error(error: ValueError) -> CommandInputError:
     return CommandInputError(
-        str(error).replace("MissionPriority", "mission priority")
+        str(error)
+        .replace("MissionPriority", "mission priority")
+        .replace("CampaignType", "campaign type")
     )
 
 
@@ -146,13 +154,16 @@ def _roadmap_from_input(value: object):
 
 def _campaign_from_input(value: object) -> Campaign:
     raw_campaign = _object(value, "campaign")
-    campaign_type = _string(_field(raw_campaign, "campaign_type"), "campaign_type")
+    raw_date = _optional_string(raw_campaign, "target_date")
+    inferred_type = "targeted" if raw_date is not None else "flexible"
     curriculum_scope = _optional_string(raw_campaign, "curriculum_scope", "balanced")
     coaching_style = _optional_string(raw_campaign, "coaching_style", "supportive")
-    raw_date = _optional_string(raw_campaign, "target_date")
     campaign_id = _optional_string(raw_campaign, "id")
     mission_inputs = _array(_field(raw_campaign, "missions"), "missions")
     try:
+        campaign_type = CampaignType(
+            raw_campaign.get("campaign_type", inferred_type)
+        )
         missions = []
         for value in mission_inputs:
             data = _object(value, "mission")
@@ -160,7 +171,7 @@ def _campaign_from_input(value: object) -> Campaign:
             title = _string(_field(data, "title"), "mission title")
             missions.append(Mission(mission_id, title, data.get("weight", 1.0)))
         settings = CampaignSettings(
-            campaign_type=CampaignType(campaign_type),
+            campaign_type=campaign_type,
             curriculum_scope=CurriculumScope(curriculum_scope),
             coaching_style=CoachingStyle(coaching_style),
             target_date=date.fromisoformat(raw_date) if raw_date is not None else None,
@@ -180,7 +191,7 @@ def _campaign_from_input(value: object) -> Campaign:
         raise _input_error(error) from error
 
 
-def _setup(payload: dict, learners_root: Path) -> dict:
+def _state_from_setup_payload(payload: dict) -> CampaignState:
     campaign = _campaign_from_input(_field(payload, "campaign"))
     mission_plans = tuple(
         _mission_plan_from_input(item)
@@ -198,35 +209,45 @@ def _setup(payload: dict, learners_root: Path) -> dict:
             mission_plans, tuple(mission.id for mission in campaign.missions)
         )
         validate_roadmap(roadmap, mission_plans)
-        priority_ids = next_priority_ids(roadmap, mission_plans)
     except ValueError as error:
         raise _input_error(error) from error
-    if not priority_ids:
-        raise CommandInputError("active roadmap phase has no missions")
-    plan_by_id = {plan.id: plan for plan in mission_plans}
-    priorities = [plan_by_id[mission_id].title for mission_id in priority_ids]
     try:
         learner_id = normalize_learner_id(
             _string(_field(payload, "learner_id"), "learner_id")
         )
     except LearnerRepositoryError as error:
         raise _input_error(error) from error
+    prior_knowledge = (
+        _string(payload["prior_knowledge"], "prior_knowledge").strip()
+        if "prior_knowledge" in payload
+        else ""
+    )
     try:
-        state = CampaignState(
+        return CampaignState(
             campaign=campaign,
             learner_id=learner_id,
             mission_plans=mission_plans,
             roadmap=roadmap,
+            prior_knowledge=prior_knowledge,
         )
     except ValueError as error:
         raise _input_error(error) from error
+
+
+def _setup(payload: dict, learners_root: Path) -> dict:
+    state = _state_from_setup_payload(payload)
+    priority_ids = next_priority_ids(state.roadmap, state.mission_plans)
+    if not priority_ids:
+        raise CommandInputError("active roadmap phase has no missions")
+    plan_by_id = {plan.id: plan for plan in state.mission_plans}
+    priorities = [plan_by_id[mission_id].title for mission_id in priority_ids]
     try:
-        save_learner_campaign(learners_root, state, create_only=True)
-    except LearnerRepositoryError as error:
+        create_and_activate_campaign(learners_root, state)
+    except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
     return {
         "learner_id": state.learner_id,
-        "campaign_id": campaign.id,
+        "campaign_id": state.campaign.id,
         "next_priorities": priorities,
         "first_mission_id": priority_ids[0],
     }
@@ -283,12 +304,94 @@ def _validate_map(payload: dict, learners_root: Path) -> dict:
     return {"valid": True}
 
 
+def _list_campaign_status(payload: dict, learners_root: Path) -> dict:
+    learner_id = _string(_field(payload, "learner_id"), "learner_id")
+    try:
+        summaries = list_campaign_summaries(learners_root, learner_id)
+    except (LearnerRepositoryError, CampaignStorageError) as error:
+        raise _input_error(error) from error
+    return {
+        "campaigns": [
+            {"id": item.id, "goal": item.goal, "status": item.lifecycle.value}
+            for item in summaries
+        ]
+    }
+
+
+def _transfers_from_input(payload: dict) -> tuple[EvidenceTransfer, ...]:
+    values = _array(_field(payload, "evidence_transfers"), "evidence_transfers")
+    try:
+        return tuple(
+            EvidenceTransfer(
+                _string(
+                    _field(
+                        _object(value, "evidence transfer"), "source_mission_id"
+                    ),
+                    "source_mission_id",
+                ),
+                _string(
+                    _field(
+                        _object(value, "evidence transfer"), "target_mission_id"
+                    ),
+                    "target_mission_id",
+                ),
+            )
+            for value in values
+        )
+    except ValueError as error:
+        raise _input_error(error) from error
+
+
+def _transition_campaign(payload: dict, learners_root: Path) -> dict:
+    new_state = _state_from_setup_payload(payload)
+    source_campaign_id = _string(
+        _field(payload, "source_campaign_id"), "source_campaign_id"
+    )
+    transfers = _transfers_from_input(payload)
+    try:
+        active = select_active_campaign(learners_root, new_state.learner_id)
+        if active.campaign.id != source_campaign_id:
+            raise CommandInputError(
+                "source_campaign_id is not the active campaign"
+            )
+        persisted = transition_campaign(
+            learners_root, new_state.learner_id, new_state, transfers
+        )
+    except (LearnerRepositoryError, CampaignStorageError) as error:
+        raise _input_error(error) from error
+    return {"active_campaign_id": persisted.campaign.id}
+
+
+def _resume_campaign(payload: dict, learners_root: Path) -> dict:
+    learner_id = _string(_field(payload, "learner_id"), "learner_id")
+    campaign_id = _string(_field(payload, "campaign_id"), "campaign_id")
+    try:
+        active = activate_campaign(learners_root, learner_id, campaign_id)
+    except (LearnerRepositoryError, CampaignStorageError) as error:
+        raise _input_error(error) from error
+    return {"active_campaign_id": active.campaign.id}
+
+
+def _complete_campaign(payload: dict, learners_root: Path) -> dict:
+    learner_id = _string(_field(payload, "learner_id"), "learner_id")
+    campaign_id = _string(_field(payload, "campaign_id"), "campaign_id")
+    try:
+        completed = complete_campaign(learners_root, learner_id, campaign_id)
+    except (LearnerRepositoryError, CampaignStorageError) as error:
+        raise _input_error(error) from error
+    return {"completed_campaign_id": completed.campaign.id}
+
+
 COMMANDS = {
     "setup": _setup,
     "list-campaigns": _list_campaigns,
     "validate-state": _validate_state,
     "validate-mission-map": _validate_map,
     "show-roadmap": _show_roadmap,
+    "list-campaign-status": _list_campaign_status,
+    "transition-campaign": _transition_campaign,
+    "resume-campaign": _resume_campaign,
+    "complete-campaign": _complete_campaign,
 }
 
 

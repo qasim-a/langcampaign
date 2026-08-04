@@ -85,7 +85,6 @@ def setup_payload():
         "campaign": {
             "goal": "Handle a delayed hotel arrival",
             "target_language": "Spanish",
-            "campaign_type": "flexible",
             "missions": [
                 {
                     "id": "delayed-arrival",
@@ -94,6 +93,7 @@ def setup_payload():
                 }
             ],
         },
+        "prior_knowledge": "Can read casual messages but rarely speaks.",
         "mission_plans": [
             {
                 "id": "delayed-arrival",

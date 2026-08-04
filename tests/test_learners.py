@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier
 
@@ -9,14 +10,25 @@ import langcampaign.learners as learners
 from langcampaign.learners import (
     CampaignAlreadyExistsError,
     CampaignSelectionError,
+    CampaignSummary,
+    EvidenceTransfer,
+    activate_campaign,
     campaign_state_path,
+    complete_campaign,
+    create_and_activate_campaign,
+    list_campaign_summaries,
     list_learner_campaigns,
     normalize_learner_id,
     save_learner_campaign,
+    select_active_campaign,
     select_campaign,
+    transition_campaign,
 )
-from langcampaign.models import new_campaign
+from langcampaign.assessment import AssessmentEvidence
+from langcampaign.models import Mission, new_campaign
 from langcampaign.storage import (
+    CampaignLifecycle,
+    LearnerCampaignIndex,
     CampaignState,
     CampaignStorageError,
     save_campaign_state,
@@ -244,3 +256,250 @@ def test_create_only_save_allows_exactly_one_concurrent_creator(tmp_path):
     )
     assert select_campaign(tmp_path, "Qasim Ali", first.campaign.id) in (first, second)
     assert list(tmp_path.rglob(".state.json.*.tmp")) == []
+
+
+def test_first_campaign_becomes_active_and_second_is_paused(tmp_path):
+    first = state("Text friends")
+    second = state("Read posts")
+
+    create_and_activate_campaign(tmp_path, first)
+    save_learner_campaign(tmp_path, second, create_only=True)
+
+    assert list_campaign_summaries(tmp_path, first.learner_id) == (
+        CampaignSummary(first.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(second.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )
+
+
+def test_resume_switches_active_pointer_without_rewriting_campaign_state(tmp_path):
+    first = state("Text friends")
+    second = state("Read posts")
+    create_and_activate_campaign(tmp_path, first)
+    save_learner_campaign(tmp_path, second, create_only=True)
+    first_path = campaign_state_path(tmp_path, first.learner_id, first.campaign.id)
+    second_path = campaign_state_path(tmp_path, second.learner_id, second.campaign.id)
+    original_bytes = (first_path.read_bytes(), second_path.read_bytes())
+
+    activate_campaign(tmp_path, first.learner_id, second.campaign.id)
+
+    assert (first_path.read_bytes(), second_path.read_bytes()) == original_bytes
+    assert list_campaign_summaries(tmp_path, first.learner_id) == (
+        CampaignSummary(first.campaign.id, "Text friends", CampaignLifecycle.PAUSED),
+        CampaignSummary(second.campaign.id, "Read posts", CampaignLifecycle.ACTIVE),
+    )
+
+
+def test_transition_maps_only_explicit_evidence_and_pauses_previous(tmp_path):
+    source_campaign = new_campaign("Text friends", "Spanish").with_missions(
+        (Mission("source-a", "Source A"), Mission("source-b", "Source B"))
+    )
+    source_evidence = (
+        AssessmentEvidence(
+            "source-a", 91, True, "written", datetime(2026, 8, 3, tzinfo=timezone.utc), "A2"
+        ),
+        AssessmentEvidence(
+            "source-b", 74, True, "written", datetime(2026, 8, 3, tzinfo=timezone.utc)
+        ),
+    )
+    source = CampaignState(source_campaign, source_evidence, "Qasim Ali")
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions(
+            (Mission("target-a", "Target A"), Mission("target-b", "Target B"))
+        ),
+        learner_id="Qasim Ali",
+    )
+    create_and_activate_campaign(tmp_path, source)
+    source_path = campaign_state_path(tmp_path, source.learner_id, source.campaign.id)
+    source_bytes = source_path.read_bytes()
+
+    transition_campaign(
+        tmp_path,
+        "Qasim Ali",
+        target,
+        (EvidenceTransfer("source-a", "target-a"),),
+    )
+
+    transferred = select_campaign(tmp_path, "Qasim Ali", target.campaign.id)
+    assert transferred.assessment_evidence == (
+        replace(source_evidence[0], mission_id="target-a"),
+    )
+    assert source_path.read_bytes() == source_bytes
+    assert select_campaign(tmp_path, "Qasim Ali", source.campaign.id) == source
+    assert list_campaign_summaries(tmp_path, "Qasim Ali") == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.PAUSED),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.ACTIVE),
+    )
+
+
+def test_failed_transition_keeps_previous_campaign_active(tmp_path, monkeypatch):
+    source = state("Text friends")
+    target = state("Read posts")
+    create_and_activate_campaign(tmp_path, source)
+
+    def fail_publish(*args, **kwargs):
+        del args, kwargs
+        raise OSError("index publication failed")
+
+    monkeypatch.setattr(learners, "save_learner_index_at", fail_publish)
+
+    with pytest.raises(OSError, match="index publication failed"):
+        transition_campaign(tmp_path, source.learner_id, target, ())
+
+    assert select_active_campaign(tmp_path, source.learner_id) == source
+    assert list_campaign_summaries(tmp_path, source.learner_id) == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )
+
+
+def test_completed_campaign_cannot_be_reactivated(tmp_path):
+    stored = state()
+    create_and_activate_campaign(tmp_path, stored)
+
+    complete_campaign(tmp_path, stored.learner_id, stored.campaign.id)
+
+    with pytest.raises(CampaignSelectionError, match="completed"):
+        activate_campaign(tmp_path, stored.learner_id, stored.campaign.id)
+
+
+def test_selecting_active_campaign_requires_a_unique_legacy_candidate(tmp_path):
+    with pytest.raises(CampaignSelectionError, match="no active campaign"):
+        select_active_campaign(tmp_path, "Qasim Ali")
+
+    only = state()
+    save_learner_campaign(tmp_path, only, create_only=True)
+    assert select_active_campaign(tmp_path, "Qasim Ali") == only
+
+    save_learner_campaign(tmp_path, state("Read posts"), create_only=True)
+    with pytest.raises(CampaignSelectionError, match="ambiguous"):
+        select_active_campaign(tmp_path, "Qasim Ali")
+
+
+def test_lifecycle_operations_materialize_legacy_index_and_reject_bad_index_ids(tmp_path):
+    stored = state()
+    save_learner_campaign(tmp_path, stored, create_only=True)
+
+    activate_campaign(tmp_path, stored.learner_id, stored.campaign.id)
+
+    index_path = tmp_path / "qasim-ali" / "index.json"
+    assert index_path.exists()
+    index_path.write_text(
+        '{"schema_version": 1, "active_campaign_id": "missing", "completed_campaign_ids": []}'
+    )
+    with pytest.raises(CampaignStorageError, match="references missing campaign"):
+        list_campaign_summaries(tmp_path, stored.learner_id)
+
+
+def test_transition_rejects_caller_evidence_and_invalid_mapping_boundaries(tmp_path):
+    source = CampaignState(
+        new_campaign("Text friends", "Spanish").with_missions((Mission("source", "Source"),)),
+        learner_id="Qasim Ali",
+    )
+    create_and_activate_campaign(tmp_path, source)
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions((Mission("target", "Target"),)),
+        learner_id="Qasim Ali",
+    )
+    evidence_target = replace(
+        target,
+        assessment_evidence=(
+            AssessmentEvidence("target", 90, True, "written", datetime(2026, 8, 3, tzinfo=timezone.utc)),
+        ),
+    )
+
+    with pytest.raises(CampaignSelectionError, match="assessment evidence"):
+        transition_campaign(tmp_path, "Qasim Ali", evidence_target, ())
+    with pytest.raises(CampaignSelectionError, match="source mission"):
+        transition_campaign(
+            tmp_path, "Qasim Ali", target, (EvidenceTransfer("missing", "target"),)
+        )
+
+
+def test_invalid_legacy_transition_does_not_materialize_an_index(tmp_path):
+    source = CampaignState(
+        new_campaign("Text friends", "Spanish").with_missions((Mission("source", "Source"),)),
+        learner_id="Qasim Ali",
+    )
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions((Mission("target", "Target"),)),
+        learner_id="Qasim Ali",
+    )
+    save_learner_campaign(tmp_path, source, create_only=True)
+    index_path = tmp_path / "qasim-ali" / "index.json"
+
+    with pytest.raises(CampaignSelectionError, match="source mission"):
+        transition_campaign(
+            tmp_path, "Qasim Ali", target, (EvidenceTransfer("missing", "target"),)
+        )
+
+    assert not index_path.exists()
+
+
+def test_failed_legacy_transition_preserves_the_inferred_active_campaign(
+    tmp_path, monkeypatch
+):
+    source = CampaignState(
+        new_campaign("Text friends", "Spanish").with_missions((Mission("source", "Source"),)),
+        learner_id="Qasim Ali",
+    )
+    target = CampaignState(
+        new_campaign("Read posts", "Spanish").with_missions((Mission("target", "Target"),)),
+        learner_id="Qasim Ali",
+    )
+    save_learner_campaign(tmp_path, source, create_only=True)
+    original_publish = learners.save_learner_index_at
+    calls = 0
+
+    def fail_second_publication(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("final index publication failed")
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(learners, "save_learner_index_at", fail_second_publication)
+
+    with pytest.raises(OSError, match="final index publication failed"):
+        transition_campaign(
+            tmp_path, "Qasim Ali", target, (EvidenceTransfer("source", "target"),)
+        )
+
+    assert calls == 2
+    assert select_active_campaign(tmp_path, "Qasim Ali") == source
+    assert list_campaign_summaries(tmp_path, "Qasim Ali") == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )
+
+
+def test_failed_legacy_setup_publication_leaves_new_campaign_resumable(
+    tmp_path, monkeypatch
+):
+    source = state("Text friends")
+    target = state("Read posts")
+    save_learner_campaign(tmp_path, source, create_only=True)
+
+    original_publish = learners.save_learner_index_at
+    calls = 0
+
+    def fail_final_publication(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("index publication failed")
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        learners, "save_learner_index_at", fail_final_publication
+    )
+
+    with pytest.raises(OSError, match="index publication failed"):
+        create_and_activate_campaign(tmp_path, target)
+
+    assert calls == 2
+    assert select_active_campaign(tmp_path, "Qasim Ali") == source
+    assert select_campaign(tmp_path, "Qasim Ali", target.campaign.id) == target
+    assert list_campaign_summaries(tmp_path, "Qasim Ali") == (
+        CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
+        CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
+    )
