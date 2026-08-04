@@ -1,8 +1,8 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 
@@ -503,3 +503,54 @@ def test_failed_legacy_setup_publication_leaves_new_campaign_resumable(
         CampaignSummary(source.campaign.id, "Text friends", CampaignLifecycle.ACTIVE),
         CampaignSummary(target.campaign.id, "Read posts", CampaignLifecycle.PAUSED),
     )
+
+
+def test_runtime_and_lifecycle_mutations_share_lock_order_without_deadlock(tmp_path):
+    stored = state()
+    create_and_activate_campaign(tmp_path, stored)
+    transform_entered = Event()
+    release_transform = Event()
+
+    def transform(current):
+        transform_entered.set()
+        assert release_transform.wait(timeout=2)
+        return current
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        runtime_future = executor.submit(
+            learners.mutate_learner_campaign,
+            tmp_path,
+            stored.learner_id,
+            stored.campaign.id,
+            0,
+            transform,
+            require_active=True,
+        )
+        assert transform_entered.wait(timeout=1)
+        lifecycle_future = executor.submit(
+            complete_campaign, tmp_path, stored.learner_id, stored.campaign.id
+        )
+        with pytest.raises(FutureTimeoutError):
+            lifecycle_future.result(timeout=0.1)
+        release_transform.set()
+        assert runtime_future.result(timeout=1).revision == 1
+        assert lifecycle_future.result(timeout=1).campaign.id == stored.campaign.id
+
+
+def test_completed_lifecycle_is_revalidated_inside_runtime_synchronization(tmp_path):
+    stored = state()
+    create_and_activate_campaign(tmp_path, stored)
+    complete_campaign(tmp_path, stored.learner_id, stored.campaign.id)
+
+    with pytest.raises(Exception) as raised:
+        learners.mutate_learner_campaign(
+            tmp_path,
+            stored.learner_id,
+            stored.campaign.id,
+            0,
+            lambda current: current,
+            require_active=True,
+        )
+
+    assert type(raised.value).__name__ == "CampaignCompletedError"
+    assert select_campaign(tmp_path, stored.learner_id, stored.campaign.id).revision == 0

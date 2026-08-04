@@ -190,15 +190,39 @@ class CampaignState:
             if identity in identities:
                 raise ValueError("mission attempt identities must be unique")
             identities.add(identity)
-            if not any(
+            matching_evidence = tuple(
                 evidence.mission_id == attempt.mission_id
                 and evidence.score == attempt.score
+                and evidence.independent is True
                 and evidence.modality == attempt.modality
                 and evidence.assessed_at == attempt.assessed_at
                 for evidence in self.assessment_evidence
-            ):
-                raise ValueError("mission attempts require matching assessment evidence")
+            )
+            if sum(matching_evidence) != 1:
+                raise ValueError("mission attempts require exactly one independent matching assessment evidence")
         if self.active_session is not None:
+            if self.mission_plans:
+                plan = next(
+                    item for item in self.mission_plans
+                    if item.id == self.active_session.mission_id
+                )
+                if self.active_session.content.capability != plan.capability:
+                    raise ValueError("active session content capability must match mission plan")
+            if self.active_session.next_action is not None:
+                action = self.active_session.next_action
+                if action.mission_id is not None and action.mission_id not in mission_ids:
+                    raise ValueError("next action must reference a campaign mission")
+                if action.target_phase_id is not None:
+                    if self.roadmap is None:
+                        raise ValueError("next action phase requires a roadmap")
+                    target_phase = next(
+                        (phase for phase in self.roadmap.phases if phase.id == action.target_phase_id),
+                        None,
+                    )
+                    if target_phase is None:
+                        raise ValueError("next action must reference a roadmap phase")
+                    if action.mission_id is not None and action.mission_id not in target_phase.mission_ids:
+                        raise ValueError("next action mission must belong to its target phase")
             completed = [item.attempt_number for item in self.mission_attempts if item.mission_id == self.active_session.mission_id]
             if completed and self.active_session.attempt_number <= max(completed):
                 matching = any(
@@ -209,13 +233,25 @@ class CampaignState:
                 if not (self.active_session.checkpoint is MissionCheckpoint.ASSESSED and matching):
                     raise ValueError("active session attempt must follow completed attempts")
             if self.active_session.checkpoint is MissionCheckpoint.ASSESSED:
-                matching_attempt = next(
+                if self.active_session.next_action is None:
+                    raise ValueError("assessed session requires a persisted next action")
+                matching_attempt = next((
                     item for item in self.mission_attempts
                     if item.mission_id == self.active_session.mission_id
                     and item.attempt_number == self.active_session.attempt_number
-                )
+                ), None)
+                if matching_attempt is None:
+                    raise ValueError("assessed session requires a matching mission attempt")
                 if matching_attempt.outcome is not self.active_session.latest_outcome:
                     raise ValueError("assessed session outcome must match stored attempt")
+                if matching_attempt.kind is not self.active_session.kind:
+                    raise ValueError("assessed session kind must match stored attempt")
+                if matching_attempt.rubric != self.active_session.content.rubric:
+                    raise ValueError("assessed session rubric must match stored attempt")
+                if self.active_session.adjustment is not DifficultyAdjustment.STANDARD:
+                    raise ValueError("assessed session adjustment must be standard")
+                if self.active_session.content_refresh_required:
+                    raise ValueError("assessed session cannot require refreshed content")
         if len(set(self.completed_review_phase_ids)) != len(self.completed_review_phase_ids):
             raise ValueError("completed_review_phase_ids must be unique")
         if self.roadmap is None:
@@ -317,11 +353,33 @@ def _assessment_evidence_from_dict(data: dict) -> AssessmentEvidence:
     )
 
 
+def _runtime_object(value: object, name: str, keys: set[str]) -> dict:
+    if type(value) is not dict:
+        raise ValueError(f"{name} must be an object")
+    if set(value) != keys:
+        raise ValueError(f"{name} fields are invalid")
+    return value
+
+
+def _runtime_array(value: object, name: str) -> list:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    return value
+
+
+def _runtime_string_array(value: object, name: str) -> tuple[str, ...]:
+    values = _runtime_array(value, name)
+    if any(type(item) is not str for item in values):
+        raise ValueError(f"{name} must contain strings")
+    return tuple(values)
+
+
 def rubric_criterion_to_dict(item: RubricCriterion) -> dict:
     return {"id": item.id, "description": item.description, "weight": item.weight}
 
 
 def rubric_criterion_from_dict(data: dict) -> RubricCriterion:
+    _runtime_object(data, "rubric criterion", {"id", "description", "weight"})
     return RubricCriterion(data["id"], data["description"], data["weight"])
 
 
@@ -338,11 +396,20 @@ def mission_content_to_dict(content: MissionContent) -> dict:
 
 
 def mission_content_from_dict(data: dict) -> MissionContent:
+    _runtime_object(data, "mission content", {
+        "generation_id", "candidate_number", "capability", "scenario",
+        "teaching_objectives", "essential_language", "guided_prompts",
+        "assessment_prompt", "rubric",
+    })
+    teaching_objectives = _runtime_string_array(data["teaching_objectives"], "teaching_objectives")
+    essential_language = _runtime_string_array(data["essential_language"], "essential_language")
+    guided_prompts = _runtime_string_array(data["guided_prompts"], "guided_prompts")
+    rubric = _runtime_array(data["rubric"], "rubric")
     return MissionContent(
         data["generation_id"], data["candidate_number"], data["capability"], data["scenario"],
-        tuple(data["teaching_objectives"]), tuple(data["essential_language"]),
-        tuple(data["guided_prompts"]), data["assessment_prompt"],
-        tuple(rubric_criterion_from_dict(item) for item in data["rubric"]),
+        teaching_objectives, essential_language,
+        guided_prompts, data["assessment_prompt"],
+        tuple(rubric_criterion_from_dict(item) for item in rubric),
     )
 
 
@@ -351,6 +418,7 @@ def criterion_score_to_dict(item: CriterionScore) -> dict:
 
 
 def criterion_score_from_dict(data: dict) -> CriterionScore:
+    _runtime_object(data, "criterion score", {"criterion_id", "score"})
     return CriterionScore(data["criterion_id"], data["score"])
 
 
@@ -359,6 +427,7 @@ def next_action_to_dict(action: NextAction) -> dict:
 
 
 def next_action_from_dict(data: dict) -> NextAction:
+    _runtime_object(data, "next action", {"kind", "mission_id", "target_phase_id"})
     return NextAction(NextActionType(data["kind"]), data.get("mission_id"), data.get("target_phase_id"))
 
 
@@ -373,10 +442,16 @@ def mission_attempt_to_dict(item: MissionAttemptRecord) -> dict:
 
 
 def mission_attempt_from_dict(data: dict) -> MissionAttemptRecord:
+    _runtime_object(data, "mission attempt", {
+        "mission_id", "attempt_number", "kind", "rubric", "criterion_scores",
+        "score", "outcome", "modality", "result_statement", "assessed_at",
+    })
+    rubric = _runtime_array(data["rubric"], "rubric")
+    scores = _runtime_array(data["criterion_scores"], "criterion_scores")
     return MissionAttemptRecord(
         data["mission_id"], data["attempt_number"], AttemptKind(data["kind"]),
-        tuple(rubric_criterion_from_dict(item) for item in data["rubric"]),
-        tuple(criterion_score_from_dict(item) for item in data["criterion_scores"]),
+        tuple(rubric_criterion_from_dict(item) for item in rubric),
+        tuple(criterion_score_from_dict(item) for item in scores),
         data["score"], MissionOutcome(data["outcome"]), data["modality"], data["result_statement"],
         datetime.fromisoformat(data["assessed_at"]),
     )
@@ -394,6 +469,10 @@ def active_session_to_dict(session: ActiveMissionSession) -> dict:
 
 
 def active_session_from_dict(data: dict) -> ActiveMissionSession:
+    _runtime_object(data, "active session", {
+        "mission_id", "attempt_number", "kind", "checkpoint", "adjustment",
+        "content", "latest_outcome", "next_action", "content_refresh_required",
+    })
     return ActiveMissionSession(
         data["mission_id"], data["attempt_number"], AttemptKind(data["kind"]),
         MissionCheckpoint(data["checkpoint"]), DifficultyAdjustment(data["adjustment"]),
@@ -688,7 +767,7 @@ def _read_envelope_text(text: str) -> dict:
         raise CampaignStorageError(
             "invalid campaign storage: malformed JSON"
         ) from error
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         raise CampaignStorageError(
             "invalid campaign storage: envelope must be an object"
         )
@@ -701,7 +780,7 @@ def _read_envelope_text(text: str) -> dict:
         raise CampaignStorageError(
             f"unsupported schema_version: {version}"
         )
-    if not isinstance(payload.get("campaign"), dict):
+    if type(payload.get("campaign")) is not dict:
         raise CampaignStorageError(
             "invalid campaign storage: campaign must be an object"
         )
@@ -713,7 +792,7 @@ def _read_envelope_text(text: str) -> dict:
             CAMPAIGN_LEARNER_CONTEXT_SCHEMA_VERSION,
             CAMPAIGN_RUNTIME_SCHEMA_VERSION,
         )
-        and not isinstance(payload.get("assessment_evidence"), list)
+        and type(payload.get("assessment_evidence")) is not list
     ):
         raise CampaignStorageError(
             "invalid campaign storage: assessment_evidence must be a list"
@@ -727,13 +806,11 @@ def _read_envelope_text(text: str) -> dict:
             raise CampaignStorageError(
                 "invalid campaign storage: learner_id must be a string"
             )
-        if not isinstance(payload.get("mission_plans"), list):
+        if type(payload.get("mission_plans")) is not list:
             raise CampaignStorageError(
                 "invalid campaign storage: mission_plans must be a list"
             )
-        if payload.get("roadmap") is not None and not isinstance(
-            payload.get("roadmap"), dict
-        ):
+        if payload.get("roadmap") is not None and type(payload.get("roadmap")) is not dict:
             raise CampaignStorageError(
                 "invalid campaign storage: roadmap must be an object or null"
             )
@@ -746,11 +823,11 @@ def _read_envelope_text(text: str) -> dict:
     if version == CAMPAIGN_RUNTIME_SCHEMA_VERSION:
         if type(payload.get("revision")) is not int or payload["revision"] < 0:
             raise CampaignStorageError("invalid campaign storage: revision must be a nonnegative integer")
-        if payload.get("active_session") is not None and not isinstance(payload.get("active_session"), dict):
+        if payload.get("active_session") is not None and type(payload.get("active_session")) is not dict:
             raise CampaignStorageError("invalid campaign storage: active_session must be an object or null")
-        if not isinstance(payload.get("mission_attempts"), list):
+        if type(payload.get("mission_attempts")) is not list:
             raise CampaignStorageError("invalid campaign storage: mission_attempts must be a list")
-        if not isinstance(payload.get("completed_review_phase_ids"), list):
+        if type(payload.get("completed_review_phase_ids")) is not list:
             raise CampaignStorageError("invalid campaign storage: completed_review_phase_ids must be a list")
     return payload
 
@@ -817,7 +894,7 @@ def _campaign_state_from_payload(payload: dict) -> CampaignState:
                 completed_review_phase_ids=(tuple(payload["completed_review_phase_ids"]) if payload["schema_version"] == CAMPAIGN_RUNTIME_SCHEMA_VERSION else ()),
             )
         return CampaignState(campaign, evidence)
-    except (AttributeError, KeyError, TypeError, ValueError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, StopIteration) as error:
         raise CampaignStorageError(
             "invalid campaign storage: invalid campaign payload"
         ) from error

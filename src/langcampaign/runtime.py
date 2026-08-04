@@ -145,6 +145,8 @@ class NextAction:
             _require_non_empty_string(self.mission_id, "mission_id")
         if self.target_phase_id is not None:
             _require_non_empty_string(self.target_phase_id, "target_phase_id")
+        if self.kind is NextActionType.GOAL_READY_TO_COMPLETE and self.target_phase_id is not None:
+            raise ValueError("target_phase_id must not be present for goal readiness")
 
 
 def _validate_scores(rubric: tuple[RubricCriterion, ...], scores: object) -> tuple[CriterionScore, ...]:
@@ -294,7 +296,11 @@ def select_next_action(campaign: Campaign, plans: tuple[MissionPlan, ...], roadm
     if outcome is MissionOutcome.PARTIAL:
         return NextAction(NextActionType.FOCUSED_RETRY, current_session.mission_id, phase_by_id[current_session.mission_id].id)
     statuses = {mission.id: mission.status for mission in campaign.missions}
-    statuses[current_session.mission_id] = MissionStatus.DEMONSTRATED
+    # The service may have just opened a planned review boundary by marking
+    # every required critical mission REVIEW_DUE. Preserve that durable marker;
+    # otherwise account for the current passing result in pure-policy callers.
+    if statuses[current_session.mission_id] is not MissionStatus.REVIEW_DUE:
+        statuses[current_session.mission_id] = MissionStatus.DEMONSTRATED
     ordered = tuple(mission_id for phase in roadmap.phases for mission_id in phase.mission_ids)
     for mission_id in ordered:
         if statuses.get(mission_id) is MissionStatus.REVIEW_DUE:

@@ -40,7 +40,7 @@ from .storage import (
 )
 from .runtime import CriterionScore, DifficultyAdjustment
 from .runtime_service import (
-    MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission,
+    ContentIssue, MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission,
     mission_status, start_mission, submit_assessment, validate_mission_content,
 )
 
@@ -395,13 +395,18 @@ def _integer(value: object, name: str) -> int:
 
 
 def _runtime_content_from_input(value: object):
-    data = _object(value, "content")
-    if "assessed_at" in data:
-        raise CommandInputError("content must not include assessed_at")
     try:
+        data = _object(value, "content")
+        if "assessed_at" in data:
+            raise CommandInputError("content must not include assessed_at")
         return mission_content_from_dict(data)
-    except (KeyError, TypeError, ValueError) as error:
-        raise CommandInputError(f"invalid mission content: {error}") from error
+    except (CommandInputError, KeyError, TypeError, ValueError) as error:
+        issue = ContentIssue("content", "invalid_content", f"invalid mission content: {error}")
+        raise MissionRuntimeError(
+            RuntimeErrorCode.INVALID_CONTENT,
+            "invalid mission content",
+            (issue,),
+        ) from error
 
 
 def _identity(payload: dict):
@@ -423,6 +428,11 @@ def _snapshot_data(snapshot) -> dict:
         "progress": {"percent": snapshot.progress.percent, "bar": snapshot.progress.bar},
         "next_action": (session["next_action"] if session else None),
         "rendered_progress": snapshot.rendered_progress,
+        "latest_result": (
+            __import__("langcampaign.storage", fromlist=["mission_attempt_to_dict"])
+            .mission_attempt_to_dict(snapshot.latest_result)
+            if snapshot.latest_result else None
+        ),
     }
 
 
@@ -431,7 +441,7 @@ def _validate_mission_content(payload: dict, learners_root: Path) -> dict:
     raw = _field(payload, "content")
     try:
         content = _runtime_content_from_input(raw)
-    except CommandInputError as error:
+    except (CommandInputError, MissionRuntimeError) as error:
         candidate = raw.get("candidate_number") if isinstance(raw, dict) else None
         return {
             "valid": False, "content": {}, "correction_allowed": candidate == 1,
@@ -467,7 +477,7 @@ def _adjust_difficulty(payload: dict, learners_root: Path) -> dict:
     try:
         adjustment = DifficultyAdjustment(_string(_field(payload, "adjustment"), "adjustment"))
     except ValueError as error:
-        raise CommandInputError("invalid adjustment") from error
+        raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, "invalid adjustment") from error
     return _snapshot_data(adjust_difficulty(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), adjustment))
 
 
@@ -475,7 +485,10 @@ def _submit_assessment(payload: dict, learners_root: Path) -> dict:
     if "assessed_at" in payload:
         raise CommandInputError("assessed_at is engine generated")
     learner_id, campaign_id = _identity(payload)
-    scores = tuple(CriterionScore(_string(_field(_object(item, "criterion score"), "criterion_id"), "criterion_id"), _integer(_field(_object(item, "criterion score"), "score"), "score")) for item in _array(_field(payload, "criterion_scores"), "criterion_scores"))
+    try:
+        scores = tuple(CriterionScore(_string(_field(_object(item, "criterion score"), "criterion_id"), "criterion_id"), _integer(_field(_object(item, "criterion score"), "score"), "score")) for item in _array(_field(payload, "criterion_scores"), "criterion_scores"))
+    except ValueError as error:
+        raise MissionRuntimeError(RuntimeErrorCode.INVALID_REQUEST, str(error)) from error
     independent = _field(payload, "independent")
     if type(independent) is not bool: raise CommandInputError("independent must be a bool")
     return _snapshot_data(submit_assessment(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), scores, independent, _string(_field(payload, "modality"), "modality"), _string(_field(payload, "result_statement"), "result_statement")))
@@ -519,6 +532,14 @@ def run_command(command: str, payload: dict, learners_root: Path) -> CommandResu
             details["current_revision"] = error.current_revision
         return CommandResult(False, error=details)
     except CommandInputError as error:
+        if command in {
+            "validate-mission-content", "mission-status", "start-mission",
+            "advance-mission", "adjust-difficulty", "submit-assessment",
+        }:
+            return CommandResult(
+                False,
+                error={"code": RuntimeErrorCode.INVALID_REQUEST.value, "message": str(error)},
+            )
         return CommandResult(False, error=str(error))
 
 

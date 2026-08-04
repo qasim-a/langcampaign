@@ -31,7 +31,7 @@ from langcampaign.storage import (
 from langcampaign.runtime import (
     ActiveMissionSession, AttemptKind, CriterionScore, DifficultyAdjustment,
     MissionAttemptRecord, MissionCheckpoint, MissionContent, MissionOutcome,
-    RubricCriterion,
+    NextAction, NextActionType, RubricCriterion,
 )
 from tests.fixtures import delayed_arrival, roadmap
 
@@ -317,7 +317,7 @@ def test_version_five_round_trips_runtime_state_and_nested_records(tmp_path):
         (CriterionScore("delay", 80), CriterionScore("time", 100)), 90,
         MissionOutcome.PASS, "text", "Clear reply", datetime(2026, 8, 4, tzinfo=timezone.utc),
     )
-    plan = delayed_arrival(id="reply", title="Reply")
+    plan = delayed_arrival(id="reply", title="Reply", capability=content.capability)
     stored_roadmap = replace(roadmap(), phases=(
         storage.RoadmapPhase("phase-1", "Phase", "Reply", ("reply",), True, False),
     ), active_phase_id="phase-1")
@@ -336,6 +336,109 @@ def test_version_five_round_trips_runtime_state_and_nested_records(tmp_path):
     assert payload["active_session"]["attempt_number"] == 3
     assert payload["mission_attempts"][0]["criterion_scores"] == [{"criterion_id": "delay", "score": 80}, {"criterion_id": "time", "score": 100}]
     assert payload["completed_review_phase_ids"] == ["phase-1"]
+
+
+def _assessed_runtime_state(*, evidence=None):
+    campaign = new_campaign("Handle hotel delays", "Spanish").with_missions((Mission("reply", "Reply"),))
+    content = _runtime_content()
+    assessed_at = datetime(2026, 8, 4, tzinfo=timezone.utc)
+    record = MissionAttemptRecord(
+        "reply", 1, AttemptKind.INITIAL, content.rubric,
+        (CriterionScore("delay", 80), CriterionScore("time", 100)), 90,
+        MissionOutcome.PASS, "text", "Clear reply", assessed_at,
+    )
+    plan = delayed_arrival(id="reply", title="Reply", capability=content.capability)
+    stored_roadmap = replace(roadmap(), phases=(
+        storage.RoadmapPhase("phase-1", "Phase", "Reply", ("reply",), False, False),
+    ), active_phase_id="phase-1")
+    matching = AssessmentEvidence("reply", 90, True, "text", assessed_at)
+    return CampaignState(
+        campaign,
+        (matching,) if evidence is None else evidence,
+        "qasim",
+        (plan,),
+        stored_roadmap,
+        active_session=ActiveMissionSession(
+            "reply", 1, AttemptKind.INITIAL, MissionCheckpoint.ASSESSED,
+            DifficultyAdjustment.STANDARD, content, MissionOutcome.PASS,
+            NextAction(NextActionType.GOAL_READY_TO_COMPLETE),
+        ),
+        mission_attempts=(record,),
+    )
+
+
+@pytest.mark.parametrize("raw_value", ({"prompt": "Try"}, "Try"))
+def test_v5_runtime_nested_containers_require_exact_json_types(tmp_path, raw_value):
+    state = replace(_assessed_runtime_state(), active_session=replace(_assessed_runtime_state().active_session, checkpoint=MissionCheckpoint.CHECK_READY, latest_outcome=None, next_action=None), mission_attempts=(), assessment_evidence=())
+    path = tmp_path / "state.json"
+    save_campaign_state(path, state)
+    payload = json.loads(path.read_text())
+    payload["active_session"]["content"]["guided_prompts"] = raw_value
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(CampaignStorageError):
+        load_campaign_state(path)
+
+
+@pytest.mark.parametrize("evidence", ((), None))
+def test_mission_attempt_requires_exactly_one_independent_evidence_record(evidence):
+    base = _assessed_runtime_state()
+    matching = base.assessment_evidence[0]
+    invalid = (replace(matching, independent=False),) if evidence == () else (matching, matching)
+
+    with pytest.raises(ValueError, match="exactly one independent"):
+        replace(base, assessment_evidence=invalid)
+
+
+def test_assessed_session_without_matching_attempt_is_an_explicit_validation_error():
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="matching mission attempt"):
+        replace(base, mission_attempts=(), assessment_evidence=())
+
+
+def test_assessed_session_requires_its_persisted_next_action():
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="next action"):
+        replace(base, active_session=replace(base.active_session, next_action=None))
+
+
+@pytest.mark.parametrize(
+    "next_action",
+    (
+        NextAction(NextActionType.NEXT_MISSION, "missing", "phase-1"),
+        NextAction(NextActionType.NEXT_MISSION, "reply", "missing-phase"),
+    ),
+)
+def test_v5_next_action_references_known_missions_and_phases(next_action):
+    base = _assessed_runtime_state()
+
+    with pytest.raises(ValueError, match="next action"):
+        replace(base, active_session=replace(base.active_session, next_action=next_action))
+
+
+def test_assessed_session_rubric_matches_immutable_attempt():
+    base = _assessed_runtime_state()
+    different_content = replace(
+        base.active_session.content,
+        rubric=(RubricCriterion("meaning", "Meaning", 100),),
+    )
+
+    with pytest.raises(ValueError, match="rubric"):
+        replace(base, active_session=replace(base.active_session, content=different_content))
+
+
+def test_all_malformed_v5_assessed_session_shapes_are_wrapped(tmp_path):
+    path = tmp_path / "state.json"
+    save_campaign_state(path, _assessed_runtime_state())
+    payload = json.loads(path.read_text())
+    payload["mission_attempts"] = []
+    payload["assessment_evidence"] = []
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(CampaignStorageError, match="invalid campaign storage"):
+        load_campaign_state(path)
 
 
 @pytest.mark.parametrize("version", (1, 2, 3, 4))
