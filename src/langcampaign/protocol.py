@@ -151,8 +151,20 @@ _COMMANDS = {
 
 
 def dispatch(request: ProtocolRequest, learners_root: Path, learner_id: str) -> dict:
-    if request.operation in (Operation.EXPORT, Operation.RESET):
-        raise ProtocolError(ProtocolErrorCode.UNKNOWN_OPERATION, "operation is not implemented yet")
+    if request.operation is Operation.EXPORT:
+        from .data_management import DataManagementError, export_profile
+        try:
+            result = export_profile(Path(learners_root).parent, Path(request.input.get("destination_directory", "")))
+        except DataManagementError as error:
+            raise ProtocolError(ProtocolErrorCode.UNSAFE_PATH, str(error)) from error
+        return {"protocol_version": 1, "operation_id": request.operation_id, "success": True, "data": {"archive_path": str(result.archive_path), "manifest": result.manifest}}
+    if request.operation is Operation.RESET:
+        from .data_management import DataManagementError, reset_profile
+        try:
+            result = reset_profile(Path(learners_root).parent, request.input.get("confirmation"))
+        except DataManagementError as error:
+            raise ProtocolError(ProtocolErrorCode.STATE_CONFLICT, str(error)) from error
+        return {"protocol_version": 1, "operation_id": request.operation_id, "success": True, "data": {"learner_id": result.profile.learner_id, "backup_path": str(result.backup_path), "recovery_path": str(result.recovery_path)}}
     payload = dict(request.input)
     if request.operation is Operation.STATUS:
         command = "mission-status" if "campaign_id" in payload else "list-campaign-status"

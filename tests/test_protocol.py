@@ -10,6 +10,7 @@ from langcampaign.protocol import (
     ProtocolErrorCode,
     ProtocolRequest,
     decode_request,
+    dispatch,
     encode_response,
 )
 
@@ -79,3 +80,38 @@ def test_protocol_ships_closed_envelope_and_operation_schemas():
         assert schema["properties"]["operation"]["const"] == name
         assert schema["additionalProperties"] is False
         assert schema["properties"]["input"]["additionalProperties"] is False
+
+
+def test_protocol_export_and_reset_use_safe_data_management(tmp_path):
+    from langcampaign.profile import load_or_create_profile
+
+    root = tmp_path / "data"
+    profile = load_or_create_profile(root)
+    (root / "learners").mkdir()
+    destination = tmp_path / "exports"
+    destination.mkdir()
+    exported = dispatch(
+        ProtocolRequest(
+            1,
+            Operation.EXPORT,
+            None,
+            {"destination_directory": str(destination)},
+        ),
+        root / "learners",
+        profile.learner_id,
+    )
+    reset = dispatch(
+        ProtocolRequest(
+            1,
+            Operation.RESET,
+            "8d626be1-4a80-4426-b06e-d17fb3f9bb19",
+            {"confirmation": "RESET LANGCAMPAIGN"},
+        ),
+        root / "learners",
+        profile.learner_id,
+    )
+
+    assert exported["success"] is True
+    assert __import__("pathlib").Path(exported["data"]["archive_path"]).exists()
+    assert reset["success"] is True
+    assert __import__("pathlib").Path(reset["data"]["backup_path"]).exists()

@@ -78,6 +78,7 @@ from .storage import (
 from .profile import Profile, ProfileError, load_or_create_profile, resolve_data_root
 from .protocol import Operation, ProtocolError, ProtocolErrorCode, ProtocolRequest
 from .receipts import OperationReceipt, canonical_input_digest, execute_idempotent, record_receipt, replay_or_conflict
+from .data_management import DataManagementError, ExportResult, ResetResult, export_profile, reset_profile
 
 __all__ = [
     "Campaign",
@@ -92,7 +93,9 @@ __all__ = [
     "ContentValidationResult",
     "CoachingStyle",
     "CurriculumScope",
+    "DataManagementError",
     "EvidenceTransfer",
+    "ExportResult",
     "LearnerCampaignIndex",
     "AssessmentScenario",
     "ActiveMissionSession",
@@ -121,6 +124,7 @@ __all__ = [
     "RuntimeProgress",
     "RuntimeErrorCode",
     "RuntimeSnapshot",
+    "ResetResult",
     "best_independent_scores",
     "calculate_readiness",
     "canonical_input_digest",
@@ -131,6 +135,7 @@ __all__ = [
     "create_and_activate_campaign",
     "derive_score",
     "execute_idempotent",
+    "export_profile",
     "forecast_campaign",
     "load_campaign",
     "load_campaign_state",
@@ -149,6 +154,7 @@ __all__ = [
     "resolve_data_root",
     "render_runtime_progress",
     "return_to_practice",
+    "reset_profile",
     "revise_campaign",
     "run_command",
     "save_campaign",
