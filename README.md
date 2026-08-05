@@ -1,209 +1,105 @@
 <div align="center">
   <h1>🌍 LangCampaign</h1>
-  <h3><em>Train for what you actually want to do with a language.</em></h3>
+  <p><strong>Train for what you actually want to do with a language.</strong></p>
 </div>
 
-<p align="center">
-  <strong>A goal-driven language-learning framework for AI agents that turns practical goals into useful missions, evidence-backed progress, and resumable campaigns.</strong>
-</p>
+LangCampaign is a Codex language-learning plugin built around practical goals. It creates focused missions, teaches only what you need next, checks what you can do without hints, records evidence-backed progress, and resumes from the exact checkpoint later.
 
----
+Travel, interviews, and presentations are valid goals—but so are texting friends, talking with family, reading social posts, following creators, playing games, or enjoying books and shows.
 
-## Contents
+## Install
 
-- [What is LangCampaign?](#-what-is-langcampaign)
-- [The lean learner journey](#-the-lean-learner-journey)
-- [What a mission looks like](#-what-a-mission-looks-like)
-- [Progress and adaptation](#-progress-and-adaptation)
-- [New goals and resuming](#-new-goals-and-resuming)
-- [Core philosophy](#-core-philosophy)
-- [Internal engine reference](#-internal-engine-reference)
-- [Current status](#-current-status)
+LangCampaign requires Codex and Python 3.11 or newer.
 
-## 🎯 What is LangCampaign?
-
-LangCampaign organizes language learning around a **campaign**: a practical
-goal you want to accomplish, with or without a deadline.
-
-Preparing for a trip, interview, or presentation is a valid campaign—but so is
-texting friends, understanding social-media posts, talking with family,
-following online creators, playing games, or enjoying books and shows with
-less translation.
-
-LangCampaign turns that goal into small missions. Each mission develops one
-useful capability, gives you guided practice, checks what you can do without
-hints, and records evidence that informs the next action.
-
-The deterministic engine now supports resumable checkpoints, rubric-derived
-assessment evidence, local adaptation, compact progress, and persisted content.
-For example: use `start-mission`, advance to `check_ready`, then send criterion
-scores to `submit-assessment`. The installable Codex teaching skill remains the
-next milestone; LangCampaign does not claim ChatGPT, voice, hosted persistence,
-or a finished consumer UI.
-
-```text
-Your goal → Small practical missions → Independent checks → Evidence-backed progress
+```bash
+codex plugin marketplace add qasim-a/langcampaign
+codex plugin add langcampaign@langcampaign
 ```
 
-## ⚡ The lean learner journey
+Start a new Codex conversation after installation. On first use, Codex asks for one-time permission to create LangCampaign’s personal data directory so the same campaigns remain available across repositories.
 
-> [!NOTE]
-> LangCampaign is currently an early-stage framework. The tested campaign
-> engine, campaign-content foundation, and lean setup/lifecycle persistence are
-> implemented. Installable Codex teaching workflows and generated mission
-> conversations remain future work.
+To update later:
 
-### 1. Describe what you need
-
-Setup uses one short exchange and silently applies its fixed defaults. Tell the
-agent:
-
-- The target language.
-- The practical goal.
-- A deadline, if one exists.
-- The weekly time you can realistically use.
-- A compact description of what you can already do.
-
-You can describe prior knowledge through real situations: “I can text
-friends,” “I studied for two years but struggle to speak,” or “I am a complete
-beginner.” You do not need a proficiency label or a self-designed curriculum.
-
-Defaults are applied silently. The lean MVP has one fixed presentation and
-coaching style: concise, candid, and encouraging. Setup does not ask you to
-choose curriculum scope, coaching style, presentation style, or an exact daily
-commitment.
-
-Example:
-
-```text
-Help me learn Spanish for independently handling a trip to Mexico in October.
-I can spend about two hours per week. I studied Spanish in school and can read
-simple messages, but I have trouble answering unfamiliar questions.
+```bash
+codex plugin marketplace upgrade langcampaign
 ```
 
-### 2. Begin immediately
+## Start learning
 
-Setup creates a coarse internal roadmap, two or three upcoming mission
-outlines, and detailed content only for the first mission. The roadmap stays
-hidden during normal learning and can be shown as a concise summary if you ask
-for it.
+Invoke `$langcampaign` or make a clear campaign request:
 
-The first real mission doubles as calibration. Self-reported knowledge helps
-choose the starting difficulty, but only independently demonstrated ability
-becomes progress evidence. There is no separate placement examination before
-practice begins.
+```text
+Help me learn Spanish so I can talk comfortably with my partner's family.
+I know basic Spanish and have about two hours a week.
+```
 
-### 3. Continue in small batches
+```text
+I mainly want to understand Portuguese tweets. I am a beginner and can
+practice for 90 minutes a week.
+```
 
-Later mission details are generated as you approach them, using the evidence
-already collected. LangCampaign does not need to generate a detailed full
-curriculum upfront or rebuild the whole roadmap after every response.
+Include the language, practical goal, realistic weekly time, what you already know, and a deadline if one matters. If that is enough, LangCampaign starts without further setup questions. You never need to choose curriculum, coaching, or presentation settings.
 
-## 🔁 What a mission looks like
+## The learning flow
 
-One continuous learning conversation follows this sequence:
+Each mission stays compact:
 
 ```text
 🎯 Practical capability and scenario
-   ↓
-Teach only what is needed now
-   ↓
-Short guided practice with decreasing support
-   ↓
-Clearly announced no-hints check
-   ↓
-Evidence, compact progress, and next action
+→ focused teaching
+→ guided practice
+→ announced no-hints check
+→ evidence-backed result
+→ progress and next action
 ```
 
-The no-hints check is independent in the educational sense. Language
-introduced or corrected during the check is not credited as something you
-demonstrated independently in that same check.
+Say `too easy` for a harder version or `too hard` for prerequisite support. Partial performance receives credit without being inflated into a pass.
 
-## 📊 Progress and adaptation
-
-Normal progress is intentionally compact: one colored status emoji, one short
-evidence-based result, a text progress bar, and the next mission or review.
+A typical result looks like:
 
 ```text
-✅ Mission passed
+🟡 Partial — 68%
 
-You explained the delay, gave a revised arrival time, and answered the
-follow-up without hints.
+You communicated the main point. The time expression was ambiguous; use
+“a las ocho” for a precise time.
 
-Progress  ██████░░░░  60%
-
-Next: handle an unexpected reservation problem.
+Progress  █████░░░░░  50%
+Next: one focused retry.
 ```
 
-Adaptation stays local and understandable:
+## Continue, pause, and change goals
 
-- A pass records evidence and advances.
-- Partial performance preserves earned credit and schedules focused practice
-  or a retry.
-- `too easy` raises the next mission's difficulty.
-- `too hard` adds prerequisite support before a retry.
-- A previously demonstrated capability that later fails is marked for review.
+In any new conversation, invoke `$langcampaign` and say `continue`. LangCampaign loads the active language, mission, persisted content, checkpoint, progress, and next action without asking you to restate them.
 
-The lean learner view does not include a rich dashboard, long motivational
-summary, proficiency estimate, multi-mission simulation, or full forecast
-controls.
+You can also ask naturally to:
 
-## 🔄 New goals and resuming
+- Show compact progress or the hidden roadmap summary.
+- Pause the active campaign.
+- List and resume a paused campaign.
+- Mark a campaign complete.
+- Start a materially different goal.
 
-Campaigns have three learner-relevant states:
+An existing campaign’s goal does not change in place. A new language or substantially different real-world outcome creates a new campaign and preserves the old one as paused, so you can return without starting over.
 
-- **Active:** currently guiding learning.
-- **Paused:** preserved and resumable.
-- **Completed:** intentionally finished and retained as history.
+## Data and privacy
 
-A materially new goal starts a new campaign instead of editing the existing
-goal in place. LangCampaign pauses the current campaign, creates the new one,
-and carries forward only explicitly mapped evidence-backed capabilities. The
-previous campaign keeps its roadmap, evidence, and progress and can be resumed
-later. Exactly one campaign is active at a time.
+LangCampaign stores one automatic local profile, compact generated mission content, checkpoints, assessment evidence, and progress. It does not add accounts, telemetry, hosted storage, or third-party network calls. Full conversations and model reasoning are not stored by LangCampaign.
 
-Resuming a paused campaign preserves its state and normally pauses whichever
-campaign is currently active.
+Default data locations:
 
-## 🌱 Core philosophy
+- macOS: `~/Library/Application Support/LangCampaign`
+- Linux: `$XDG_DATA_HOME/langcampaign` or `~/.local/share/langcampaign`
+- Windows: `%LOCALAPPDATA%\LangCampaign`
 
-- **Train for real use.** Accomplishing the learner's goal matters more than
-  completing a generic course.
-- **Casual goals count.** Friendship, family, entertainment, and online
-  participation are legitimate reasons to learn.
-- **Credit demonstrated ability.** Self-report can guide difficulty, but
-  progress comes from evidence.
-- **Generate only what is useful now.** Keep the roadmap coarse and mission
-  details small-batch.
-- **Adapt without erasing progress.** Preserve earned credit, prior campaigns,
-  and resumable context.
-- **Keep the interaction responsive.** Routine learner actions should need no
-  more than one model response and one local LangCampaign command.
+Ask `$langcampaign` to export your data and provide an existing destination directory. Export never overwrites an existing archive. Reset is recoverable, creates a backup first, and requires the exact confirmation `RESET LANGCAMPAIGN`. Uninstalling the plugin does not delete learning history.
 
-## 🛠️ Internal engine reference
+## Troubleshooting
 
-The platform-neutral engine predates the lean learner workflow and retains
-tested APIs for Targeted and Flexible campaign records, configurable stored
-curriculum/coaching fields, readiness calculations, approximate CEFR
-summaries, target-date forecasts, campaign revision, and richer progress
-rendering. These capabilities remain for schema compatibility and internal
-development reference; they are not configuration choices or output promises
-in the approved lean learner journey.
+- **Python requirement:** install Python 3.11 or newer, then retry.
+- **Storage permission:** approve the one-time personal-data access request; LangCampaign never falls back to the current repository.
+- **Progress not saved:** retry the same interaction. Mutation IDs prevent duplicate setup or assessment.
+- **Corrupt or newer data:** LangCampaign stops without rewriting it. Export or recovery information remains available when safely readable.
 
-The campaign-content foundation adds validated mission maps, a coarse hidden
-roadmap, repository-local learner state, atomic persistence, and nine JSON
-commands for future Codex workflows. Only an explicit `show-roadmap` command
-reveals a sanitized phase summary; normal setup, validation, and listing
-responses omit roadmap details and assumptions.
+## Current scope
 
-## 🚧 Current status
-
-The command boundary now validates generated mission maps, stores learner state
-under `learners/`, applies lean setup defaults, retains prior-knowledge context
-without crediting it as evidence, and supports active/paused/completed campaign
-lifecycle commands. The roadmap remains out of normal session output but can
-be summarized when a learner asks to see it.
-
-Generated mission conversations, installable Codex teaching workflows,
-end-to-end learner evaluation, latency checks, and product hardening remain
-future work. LangCampaign is not an accredited language-testing body.
+The MVP supports Codex with local persistence and text-based learning. ChatGPT and Claude adapters, cross-device sync, accounts, voice/pronunciation scoring, rich dashboards, and hosted services remain future work. LangCampaign is not an accredited language-testing body.

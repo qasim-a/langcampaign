@@ -1,7 +1,7 @@
 # LangCampaign Codex Delivery and Evaluation Design
 
 **Date:** 2026-08-04
-**Status:** Approved; implementation plan written
+**Status:** Implemented on `codex/codex-mvp`; final release verification pending
 
 ## Objective
 
