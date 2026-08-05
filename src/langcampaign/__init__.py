@@ -77,6 +77,7 @@ from .storage import (
 )
 from .profile import Profile, ProfileError, load_or_create_profile, resolve_data_root
 from .protocol import Operation, ProtocolError, ProtocolErrorCode, ProtocolRequest
+from .receipts import OperationReceipt, canonical_input_digest, execute_idempotent, record_receipt, replay_or_conflict
 
 __all__ = [
     "Campaign",
@@ -112,6 +113,7 @@ __all__ = [
     "ProtocolErrorCode",
     "ProtocolRequest",
     "Operation",
+    "OperationReceipt",
     "NextAction",
     "NextActionType",
     "RoadmapPhase",
@@ -121,12 +123,14 @@ __all__ = [
     "RuntimeSnapshot",
     "best_independent_scores",
     "calculate_readiness",
+    "canonical_input_digest",
     "activate_campaign",
     "adjust_difficulty",
     "advance_mission",
     "complete_campaign",
     "create_and_activate_campaign",
     "derive_score",
+    "execute_idempotent",
     "forecast_campaign",
     "load_campaign",
     "load_campaign_state",
@@ -140,6 +144,8 @@ __all__ = [
     "new_campaign",
     "outcome_for_score",
     "render_progress",
+    "record_receipt",
+    "replay_or_conflict",
     "resolve_data_root",
     "render_runtime_progress",
     "return_to_practice",

@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
 from .learners import (
+    CampaignAlreadyExistsError,
     LearnerRepositoryError,
     EvidenceTransfer,
     activate_campaign,
@@ -19,6 +20,7 @@ from .learners import (
     normalize_learner_id,
     pause_campaign,
     select_active_campaign,
+    select_campaign,
     select_campaign,
     transition_campaign,
 )
@@ -251,6 +253,25 @@ def _setup(payload: dict, learners_root: Path) -> dict:
     priorities = [plan_by_id[mission_id].title for mission_id in priority_ids]
     try:
         create_and_activate_campaign(learners_root, state)
+    except CampaignAlreadyExistsError:
+        try:
+            existing = select_campaign(
+                learners_root, state.learner_id, state.campaign.id
+            )
+            comparable = replace(
+                existing,
+                campaign=replace(
+                    existing.campaign,
+                    created_at=state.campaign.created_at,
+                ),
+                revision=state.revision,
+            )
+            if comparable != state:
+                raise CommandInputError("campaign already exists")
+            activate_campaign(learners_root, state.learner_id, state.campaign.id)
+            state = existing
+        except (LearnerRepositoryError, CampaignStorageError) as error:
+            raise _input_error(error) from error
     except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
     return {
@@ -358,6 +379,32 @@ def _transition_campaign(payload: dict, learners_root: Path) -> dict:
     transfers = _transfers_from_input(payload)
     try:
         active = select_active_campaign(learners_root, new_state.learner_id)
+        if active.campaign.id == new_state.campaign.id:
+            source = select_campaign(
+                learners_root, new_state.learner_id, source_campaign_id
+            )
+            target_by_source = {
+                item.source_mission_id: item.target_mission_id for item in transfers
+            }
+            expected_evidence = tuple(
+                replace(item, mission_id=target_by_source[item.mission_id])
+                for item in source.assessment_evidence
+                if item.mission_id in target_by_source
+            )
+            comparable = replace(
+                active,
+                campaign=replace(
+                    active.campaign,
+                    created_at=new_state.campaign.created_at,
+                ),
+                assessment_evidence=(),
+                revision=new_state.revision,
+            )
+            if comparable != new_state or active.assessment_evidence != expected_evidence:
+                raise CommandInputError(
+                    "target campaign id already exists with different transition"
+                )
+            return {"active_campaign_id": active.campaign.id}
         if active.campaign.id != source_campaign_id:
             raise CommandInputError(
                 "source_campaign_id is not the active campaign"

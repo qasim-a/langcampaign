@@ -68,6 +68,10 @@ class ProtocolRequest:
     operation_id: str | None
     input: dict[str, Any]
 
+    @property
+    def mutation(self) -> bool:
+        return self.operation not in _READS
+
 
 _READS = {
     Operation.CHECK_INSTALL,

@@ -82,13 +82,23 @@ def run_protocol(script_file: Path | None = None) -> int:
                 del sys.modules[name]
         from langcampaign.profile import load_or_create_profile, resolve_data_root
         from langcampaign.protocol import decode_request, dispatch, encode_response, failure_response, ProtocolError
+        from langcampaign.receipts import execute_idempotent
 
         request = decode_request(sys.stdin.buffer.read(1024 * 1024 + 1))
         operation_id = request.operation_id
         override = os.environ.get("LANGCAMPAIGN_DATA_ROOT")
         data_root = Path(override) if override else resolve_data_root()
         profile = load_or_create_profile(data_root)
-        response = dispatch(request, data_root / "learners", profile.learner_id)
+        if request.mutation:
+            response = execute_idempotent(
+                data_root,
+                request.operation_id,
+                request.operation.value,
+                request.input,
+                lambda: dispatch(request, data_root / "learners", profile.learner_id),
+            )
+        else:
+            response = dispatch(request, data_root / "learners", profile.learner_id)
         sys.stdout.buffer.write(encode_response(response))
         return 0
     except ProtocolError as error:

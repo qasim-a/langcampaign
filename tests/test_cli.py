@@ -38,6 +38,17 @@ def test_setup_writes_valid_state_and_returns_next_priorities(tmp_path):
     assert list(tmp_path.glob("qasim-ali/*/state.json"))
 
 
+def test_setup_with_stable_campaign_id_reconciles_timeout_replay(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["id"] = "stable-campaign"
+
+    first = run_command("setup", payload, tmp_path)
+    replay = run_command("setup", payload, tmp_path)
+
+    assert replay == first
+    assert len(list(tmp_path.glob("qasim-ali/*/state.json"))) == 1
+
+
 def test_setup_silently_applies_defaults_and_stores_prior_knowledge(tmp_path):
     payload = setup_payload()
 
@@ -619,6 +630,16 @@ def _transition_payload(source_campaign_id, learner_id="Qasim Ali"):
     payload["source_campaign_id"] = source_campaign_id
     payload["evidence_transfers"] = []
     return payload
+
+
+def test_transition_with_stable_target_reconciles_timeout_replay(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    payload = _transition_payload(created.data["campaign_id"])
+
+    first = run_command("transition-campaign", payload, tmp_path)
+    replay = run_command("transition-campaign", payload, tmp_path)
+
+    assert replay == first
 
 
 def test_transition_command_returns_error_envelopes_for_missing_and_invalid_inputs(tmp_path):
