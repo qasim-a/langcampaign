@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"casual-social","learner_request":"I want to understand Portuguese tweets.","fresh_profile":true,"expected_operations":["check-install","status","setup"],"required_properties":["casual goal accepted"],"prohibited_properties":["traditional-goal replacement"]}

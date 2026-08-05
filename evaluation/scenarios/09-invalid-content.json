@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"invalid-content","learner_request":"Start my next mission.","fresh_profile":true,"expected_operations":["status","validate-content","validate-content"],"required_properties":["one correction"],"prohibited_properties":["third generation"]}

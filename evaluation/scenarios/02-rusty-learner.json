@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"rusty-learner","learner_request":"Help me restart French; I used to speak some.","fresh_profile":true,"expected_operations":["check-install","status","setup"],"required_properties":["prior knowledge preserved","no redundant placement"],"prohibited_properties":["fabricated evidence"]}

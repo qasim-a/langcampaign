@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"travel-beginner","learner_request":"I am a beginner and need Spanish for a trip.","fresh_profile":true,"expected_operations":["check-install","status","validate-content","setup"],"required_properties":["minimal setup","practical first mission"],"prohibited_properties":["cefr estimate","full roadmap"]}

@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"fresh-resume","learner_request":"Continue where I stopped.","fresh_profile":true,"expected_operations":["check-install","status"],"required_properties":["exact checkpoint","persisted content"],"prohibited_properties":["context restatement"]}

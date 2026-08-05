@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"partial-performance","learner_request":"Continue my campaign; my check answer is partly correct.","fresh_profile":true,"expected_operations":["status","submit-assessment"],"required_properties":["partial credit","engine score"],"prohibited_properties":["inflated pass"]}

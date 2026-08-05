@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"too-hard","learner_request":"This mission is too hard.","fresh_profile":true,"expected_operations":["status","adjust-difficulty"],"required_properties":["prerequisite support"],"prohibited_properties":["roadmap rebuild"]}

@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"accidental-help","learner_request":"You gave me the answer during the check.","fresh_profile":true,"expected_operations":["status","return-to-practice"],"required_properties":["no evidence recorded"],"prohibited_properties":["assessment submission"]}

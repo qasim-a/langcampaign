@@ -1,0 +1,3 @@
+# Release evaluation
+
+Run `PYTHONPATH=src python evaluation/run_deterministic.py` for the offline fixture gate. For release, run every scenario twice from a fresh profile and record redacted metadata, transcript, adapter trace, latency, and findings. Critical means data loss/corruption, unsafe access, fabricated saved progress/evidence, or an unusable core workflow. Important means incorrect routing, resume/lifecycle, duplicate mutation, hint enforcement, or repeated extra model calls. Minor means non-blocking wording or presentation. Release requires zero Critical and zero unresolved reproducible Important findings.

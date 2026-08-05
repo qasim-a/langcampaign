@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"transition-resume","learner_request":"Start French for interviews, then resume my Spanish campaign.","fresh_profile":true,"expected_operations":["status","transition","list-campaigns","resume"],"required_properties":["old campaign paused"],"prohibited_properties":["old evidence deletion"]}

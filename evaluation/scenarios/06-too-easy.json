@@ -1,0 +1,1 @@
+{"scenario_version":1,"id":"too-easy","learner_request":"This is too easy.","fresh_profile":true,"expected_operations":["status","adjust-difficulty"],"required_properties":["harder content"],"prohibited_properties":["goal rewrite"]}
