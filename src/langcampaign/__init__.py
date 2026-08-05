@@ -76,6 +76,7 @@ from .storage import (
     save_campaign_state,
 )
 from .profile import Profile, ProfileError, load_or_create_profile, resolve_data_root
+from .protocol import Operation, ProtocolError, ProtocolErrorCode, ProtocolRequest
 
 __all__ = [
     "Campaign",
@@ -107,6 +108,10 @@ __all__ = [
     "PracticeActivity",
     "Profile",
     "ProfileError",
+    "ProtocolError",
+    "ProtocolErrorCode",
+    "ProtocolRequest",
+    "Operation",
     "NextAction",
     "NextActionType",
     "RoadmapPhase",

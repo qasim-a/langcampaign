@@ -72,5 +72,36 @@ def install_probe(script_file: Path | None = None) -> int:
     return 0
 
 
+def run_protocol(script_file: Path | None = None) -> int:
+    operation_id = None
+    try:
+        bundled_src = _bundled_src(script_file or Path(__file__))
+        sys.path.insert(0, str(bundled_src))
+        for name in tuple(sys.modules):
+            if name == "langcampaign" or name.startswith("langcampaign."):
+                del sys.modules[name]
+        from langcampaign.profile import load_or_create_profile, resolve_data_root
+        from langcampaign.protocol import decode_request, dispatch, encode_response, failure_response, ProtocolError
+
+        request = decode_request(sys.stdin.buffer.read(1024 * 1024 + 1))
+        operation_id = request.operation_id
+        override = os.environ.get("LANGCAMPAIGN_DATA_ROOT")
+        data_root = Path(override) if override else resolve_data_root()
+        profile = load_or_create_profile(data_root)
+        response = dispatch(request, data_root / "learners", profile.learner_id)
+        sys.stdout.buffer.write(encode_response(response))
+        return 0
+    except ProtocolError as error:
+        sys.stdout.buffer.write(encode_response(failure_response(error, operation_id)))
+        return 2
+    except RuntimeError as error:
+        return _fail(str(error))
+    except Exception:
+        from langcampaign.protocol import ProtocolError, ProtocolErrorCode, encode_response, failure_response
+        error = ProtocolError(ProtocolErrorCode.INTERNAL_ERROR, "unexpected internal error")
+        sys.stdout.buffer.write(encode_response(failure_response(error, operation_id)))
+        return 70
+
+
 if __name__ == "__main__":
-    raise SystemExit(install_probe())
+    raise SystemExit(run_protocol())

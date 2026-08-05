@@ -68,3 +68,54 @@ def test_install_probe_reports_missing_bundle_as_one_json_error(tmp_path):
             "retryable": False,
         },
     }
+
+
+def test_adapter_accepts_one_versioned_request_and_emits_one_response(tmp_path):
+    plugin = _copy_plugin(tmp_path / "plugin")
+    environment = os.environ.copy()
+    environment["LANGCAMPAIGN_DATA_ROOT"] = str(tmp_path / "data")
+    request = {
+        "protocol_version": 1,
+        "operation": "list-campaigns",
+        "operation_id": None,
+        "input": {},
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(plugin / "scripts/langcampaign_adapter.py")],
+        input=json.dumps(request),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.count("\n") == 1
+    assert json.loads(result.stdout) == {
+        "protocol_version": 1,
+        "operation_id": None,
+        "success": True,
+        "data": {"campaigns": []},
+    }
+
+
+def test_adapter_invalid_json_uses_typed_error_and_exit_two(tmp_path):
+    plugin = _copy_plugin(tmp_path / "plugin")
+
+    result = subprocess.run(
+        [sys.executable, str(plugin / "scripts/langcampaign_adapter.py")],
+        input="not json",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stderr == ""
+    assert json.loads(result.stdout)["error"] == {
+        "code": "INVALID_REQUEST",
+        "message": "request must be one UTF-8 JSON object",
+        "retryable": False,
+    }
