@@ -244,6 +244,50 @@ def adjust_difficulty(root, learner_id, campaign_id, expected_revision: int, mis
     return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
 
 
+def return_to_practice(
+    root,
+    learner_id,
+    campaign_id,
+    expected_revision: int,
+    mission_id: str,
+    attempt_number: int,
+) -> RuntimeSnapshot:
+    """Invalidate a helped check without recording assessment evidence."""
+    def duplicate(state):
+        session = _expected_session(state, mission_id, attempt_number)
+        return (
+            session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
+            and session.content_refresh_required
+        )
+
+    def transform(state):
+        session = _expected_session(state, mission_id, attempt_number)
+        if session.checkpoint is not MissionCheckpoint.CHECK_READY:
+            raise MissionRuntimeError(
+                RuntimeErrorCode.INVALID_TRANSITION,
+                "only a ready check can return to practice",
+            )
+        return replace(
+            state,
+            active_session=replace(
+                session,
+                checkpoint=MissionCheckpoint.GUIDED_PRACTICE,
+                content_refresh_required=True,
+            ),
+        )
+
+    return _snapshot(
+        _mutate(
+            root,
+            learner_id,
+            campaign_id,
+            expected_revision,
+            transform,
+            idempotent_if=duplicate,
+        )
+    )
+
+
 def _with_status(campaign, mission_id, outcome, kind):
     missions = []
     for mission in campaign.missions:

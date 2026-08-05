@@ -538,7 +538,7 @@ def test_argparse_invocation_errors_return_exactly_one_json_envelope(
     assert completed.stderr == ""
 
 
-def test_command_boundary_exposes_exactly_fifteen_commands():
+def test_command_boundary_exposes_exactly_seventeen_commands():
     assert tuple(cli.COMMANDS) == (
         "setup",
         "list-campaigns",
@@ -548,12 +548,14 @@ def test_command_boundary_exposes_exactly_fifteen_commands():
         "list-campaign-status",
         "transition-campaign",
         "resume-campaign",
+        "pause-campaign",
         "complete-campaign",
         "validate-mission-content",
         "mission-status",
         "start-mission",
         "advance-mission",
         "adjust-difficulty",
+        "return-to-practice",
         "submit-assessment",
     )
 
@@ -586,6 +588,27 @@ def test_lifecycle_commands_return_their_stable_success_envelopes(tmp_path):
     assert completed.to_dict() == {
         "success": True,
         "data": {"completed_campaign_id": campaign_id},
+    }
+
+
+def test_pause_command_requires_revision_and_returns_paused_snapshot(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    result = run_command(
+        "pause-campaign",
+        {
+            "learner_id": "Qasim Ali",
+            "campaign_id": created.data["campaign_id"],
+            "expected_revision": 0,
+        },
+        tmp_path,
+    )
+
+    assert result.to_dict() == {
+        "success": True,
+        "data": {
+            "paused_campaign_id": created.data["campaign_id"],
+            "revision": 1,
+        },
     }
 
 
@@ -788,6 +811,41 @@ def test_out_of_range_assessment_score_uses_typed_invalid_request(tmp_path):
 
     assert result.success is False
     assert result.error["code"] == "invalid_request"
+
+
+def test_return_to_practice_command_invalidates_ready_check(tmp_path):
+    created = run_command("setup", setup_payload(), tmp_path)
+    identity = {
+        "learner_id": "Qasim Ali",
+        "campaign_id": created.data["campaign_id"],
+        "mission_id": "delayed-arrival",
+        "attempt_number": 1,
+    }
+    started = run_command(
+        "start-mission",
+        {**identity, "expected_revision": 0, "content": mission_content_payload()},
+        tmp_path,
+    )
+    guided = run_command(
+        "advance-mission",
+        {**identity, "expected_revision": started.data["revision"]},
+        tmp_path,
+    )
+    ready = run_command(
+        "advance-mission",
+        {**identity, "expected_revision": guided.data["revision"]},
+        tmp_path,
+    )
+
+    result = run_command(
+        "return-to-practice",
+        {**identity, "expected_revision": ready.data["revision"]},
+        tmp_path,
+    )
+
+    assert result.success is True
+    assert result.data["session"]["checkpoint"] == "guided_practice"
+    assert result.data["session"]["content_refresh_required"] is True
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ from langcampaign.learners import (
     list_campaign_summaries,
     list_learner_campaigns,
     normalize_learner_id,
+    pause_campaign,
     save_learner_campaign,
     select_active_campaign,
     select_campaign,
@@ -287,6 +288,36 @@ def test_resume_switches_active_pointer_without_rewriting_campaign_state(tmp_pat
         CampaignSummary(first.campaign.id, "Text friends", CampaignLifecycle.PAUSED),
         CampaignSummary(second.campaign.id, "Read posts", CampaignLifecycle.ACTIVE),
     )
+
+
+def test_pause_clears_active_campaign_and_preserves_resumable_state(tmp_path):
+    stored = replace(state(), revision=4)
+    create_and_activate_campaign(tmp_path, stored)
+
+    paused = pause_campaign(
+        tmp_path, stored.learner_id, stored.campaign.id, expected_revision=4
+    )
+
+    assert paused.revision == 5
+    assert select_campaign(tmp_path, stored.learner_id, stored.campaign.id) == paused
+    assert list_campaign_summaries(tmp_path, stored.learner_id) == (
+        CampaignSummary(stored.campaign.id, stored.campaign.goal, CampaignLifecycle.PAUSED),
+    )
+    with pytest.raises(CampaignSelectionError, match="no active campaign"):
+        select_active_campaign(tmp_path, stored.learner_id)
+
+
+def test_pause_is_revision_safe_and_identical_replay_is_a_noop(tmp_path):
+    stored = replace(state(), revision=2)
+    create_and_activate_campaign(tmp_path, stored)
+
+    paused = pause_campaign(tmp_path, stored.learner_id, stored.campaign.id, 2)
+    replayed = pause_campaign(tmp_path, stored.learner_id, stored.campaign.id, 2)
+
+    assert replayed == paused
+    with pytest.raises(learners.CampaignRevisionConflict):
+        activate_campaign(tmp_path, stored.learner_id, stored.campaign.id)
+        pause_campaign(tmp_path, stored.learner_id, stored.campaign.id, 2)
 
 
 def test_transition_maps_only_explicit_evidence_and_pauses_previous(tmp_path):

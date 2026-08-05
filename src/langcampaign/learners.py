@@ -96,25 +96,42 @@ _MUTATION_LOCKS_GUARD = threading.Lock()
 
 
 @contextmanager
+def exclusive_file_lock(descriptor: int):
+    """Hold a standard-library cross-process exclusive lock."""
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+@contextmanager
 def _exclusive_entry_lock(directory_fd: int, name: str, key: tuple[str, ...]):
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise LearnerRepositoryError(f"{name} is not a regular file")
-        try:
-            import fcntl
-        except ImportError:  # Cross-process locking is POSIX-only.
-            with _MUTATION_LOCKS_GUARD:
-                local_lock = _MUTATION_LOCKS.setdefault(key, threading.Lock())
-            with local_lock:
+        with _MUTATION_LOCKS_GUARD:
+            local_lock = _MUTATION_LOCKS.setdefault(key, threading.Lock())
+        with local_lock:
+            with exclusive_file_lock(descriptor):
                 yield
-        else:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
     finally:
         os.close(descriptor)
 
@@ -481,7 +498,7 @@ def _active_state(
 ) -> CampaignState:
     resolved = _legacy_index_for(states, index)
     if resolved.active_campaign_id is None:
-        if not states:
+        if not states or index is not None:
             raise CampaignSelectionError("learner has no active campaign")
         raise CampaignSelectionError("active campaign selection is ambiguous")
     return next(
@@ -580,6 +597,51 @@ def complete_campaign(root: Path, learner_id: str, campaign_id: str) -> Campaign
             ),
         )
         return selected
+
+
+def pause_campaign(
+    root: Path,
+    learner_id: str,
+    campaign_id: str,
+    expected_revision: int,
+) -> CampaignState:
+    """Pause the active campaign while preserving its exact runtime state."""
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise LearnerRepositoryError("expected_revision must be a nonnegative integer")
+    campaign_id = _safe_id(campaign_id, "campaign_id")
+    with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
+        states, index = _read_lifecycle_at(learner_fd, canonical)
+        selected = next(
+            (state for state in states if state.campaign.id == campaign_id), None
+        )
+        if selected is None:
+            raise CampaignSelectionError("campaign does not exist")
+        resolved = _legacy_index_for(states, index)
+        lifecycle = resolved.lifecycle_for(campaign_id)
+        if lifecycle is CampaignLifecycle.COMPLETED:
+            raise CampaignCompletedError("campaign is completed")
+        if lifecycle is CampaignLifecycle.PAUSED:
+            return selected
+        if selected.revision != expected_revision:
+            raise CampaignRevisionConflict(selected)
+        campaign_fd = _open_directory(learner_fd, campaign_id)
+        if campaign_fd is None:
+            raise CampaignSelectionError("campaign does not exist")
+        try:
+            updated = replace(selected, revision=selected.revision + 1)
+            save_campaign_state_at(campaign_fd, updated)
+            try:
+                _publish_index_at(
+                    learner_fd,
+                    canonical,
+                    LearnerCampaignIndex(None, resolved.completed_campaign_ids),
+                )
+            except Exception:
+                save_campaign_state_at(campaign_fd, selected)
+                raise
+            return updated
+        finally:
+            os.close(campaign_fd)
 
 
 def create_and_activate_campaign(root: Path, state: CampaignState) -> Path:

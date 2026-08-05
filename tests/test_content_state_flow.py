@@ -53,12 +53,14 @@ def test_setup_persists_hidden_roadmap_and_subsequent_command_can_reveal_summary
         "list-campaign-status",
         "transition-campaign",
         "resume-campaign",
+            "pause-campaign",
             "complete-campaign",
             "validate-mission-content",
             "mission-status",
             "start-mission",
             "advance-mission",
             "adjust-difficulty",
+            "return-to-practice",
             "submit-assessment",
     )
     assert revealed.to_dict() == {

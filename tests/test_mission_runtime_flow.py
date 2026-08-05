@@ -3,7 +3,7 @@ from tests.fixtures import mission_content_payload, setup_payload
 
 
 def test_runtime_commands_are_registered_and_support_resumable_flow(tmp_path):
-    assert len(COMMANDS) == 15
+    assert len(COMMANDS) == 17
     setup = run_command("setup", setup_payload(), tmp_path)
     assert setup.success
     identity = {"learner_id": "qasim-ali", "campaign_id": setup.data["campaign_id"]}

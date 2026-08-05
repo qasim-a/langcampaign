@@ -17,6 +17,7 @@ from .learners import (
     list_learner_campaigns,
     list_campaign_summaries,
     normalize_learner_id,
+    pause_campaign,
     select_active_campaign,
     select_campaign,
     transition_campaign,
@@ -42,6 +43,7 @@ from .runtime import CriterionScore, DifficultyAdjustment
 from .runtime_service import (
     ContentIssue, MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission,
     mission_status, start_mission, submit_assessment, validate_mission_content,
+    return_to_practice,
 )
 
 
@@ -388,6 +390,20 @@ def _complete_campaign(payload: dict, learners_root: Path) -> dict:
     return {"completed_campaign_id": completed.campaign.id}
 
 
+def _pause_campaign(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    try:
+        paused = pause_campaign(
+            learners_root,
+            learner_id,
+            campaign_id,
+            _integer(_field(payload, "expected_revision"), "expected_revision"),
+        )
+    except (LearnerRepositoryError, CampaignStorageError) as error:
+        raise _input_error(error) from error
+    return {"paused_campaign_id": paused.campaign.id, "revision": paused.revision}
+
+
 def _integer(value: object, name: str) -> int:
     if type(value) is not int:
         raise CommandInputError(f"{name} must be an integer")
@@ -495,6 +511,20 @@ def _adjust_difficulty(payload: dict, learners_root: Path) -> dict:
     return _snapshot_data(adjust_difficulty(learners_root, learner_id, campaign_id, _integer(_field(payload, "expected_revision"), "expected_revision"), _string(_field(payload, "mission_id"), "mission_id"), _integer(_field(payload, "attempt_number"), "attempt_number"), adjustment))
 
 
+def _return_to_practice(payload: dict, learners_root: Path) -> dict:
+    learner_id, campaign_id = _identity(payload)
+    return _snapshot_data(
+        return_to_practice(
+            learners_root,
+            learner_id,
+            campaign_id,
+            _integer(_field(payload, "expected_revision"), "expected_revision"),
+            _string(_field(payload, "mission_id"), "mission_id"),
+            _integer(_field(payload, "attempt_number"), "attempt_number"),
+        )
+    )
+
+
 def _submit_assessment(payload: dict, learners_root: Path) -> dict:
     if "assessed_at" in payload:
         raise CommandInputError("assessed_at is engine generated")
@@ -517,12 +547,14 @@ COMMANDS = {
     "list-campaign-status": _list_campaign_status,
     "transition-campaign": _transition_campaign,
     "resume-campaign": _resume_campaign,
+    "pause-campaign": _pause_campaign,
     "complete-campaign": _complete_campaign,
     "validate-mission-content": _validate_mission_content,
     "mission-status": _mission_status,
     "start-mission": _start_mission,
     "advance-mission": _advance_mission,
     "adjust-difficulty": _adjust_difficulty,
+    "return-to-practice": _return_to_practice,
     "submit-assessment": _submit_assessment,
 }
 

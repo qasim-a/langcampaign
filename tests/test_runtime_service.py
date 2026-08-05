@@ -9,7 +9,7 @@ from langcampaign.models import Campaign, CampaignSettings, Mission, MissionStat
 from langcampaign.missions import MissionPriority
 from langcampaign.roadmaps import CampaignRoadmap, RoadmapPhase
 from langcampaign.runtime import AttemptKind, CriterionScore, DifficultyAdjustment, MissionCheckpoint, MissionContent, NextActionType, RubricCriterion
-from langcampaign.runtime_service import MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission, mission_status, start_mission, submit_assessment
+from langcampaign.runtime_service import MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission, mission_status, return_to_practice, start_mission, submit_assessment
 from langcampaign.storage import CampaignState, CampaignStorageError
 from tests.fixtures import delayed_arrival, roadmap
 
@@ -49,6 +49,28 @@ def test_difficulty_at_check_ready_requires_replacement_content(tmp_path):
     adjusted = adjust_difficulty(tmp_path, "qasim", "campaign-a", ready.revision, "delayed-arrival", 1, DifficultyAdjustment.HARDER)
     assert adjusted.session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
     assert adjusted.session.content_refresh_required is True
+
+
+def test_accidental_help_returns_check_to_guided_practice_without_evidence(tmp_path):
+    create_and_activate_campaign(tmp_path, _state())
+    started = start_mission(tmp_path, "qasim", "campaign-a", 0, "delayed-arrival", _content())
+    guided = advance_mission(tmp_path, "qasim", "campaign-a", started.revision, "delayed-arrival", 1)
+    ready = advance_mission(tmp_path, "qasim", "campaign-a", guided.revision, "delayed-arrival", 1)
+
+    recovered = return_to_practice(
+        tmp_path, "qasim", "campaign-a", ready.revision, "delayed-arrival", 1
+    )
+    replayed = return_to_practice(
+        tmp_path, "qasim", "campaign-a", ready.revision, "delayed-arrival", 1
+    )
+    stored = select_campaign(tmp_path, "qasim", "campaign-a")
+
+    assert recovered.session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
+    assert recovered.session.content_refresh_required is True
+    assert recovered.session.attempt_number == 1
+    assert stored.assessment_evidence == ()
+    assert stored.mission_attempts == ()
+    assert replayed.revision == recovered.revision
 
 
 def test_assessed_next_action_is_atomically_consumed_for_retry(tmp_path):
