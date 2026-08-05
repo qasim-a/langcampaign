@@ -1,7 +1,7 @@
 # LangCampaign Codex Delivery and Evaluation Design
 
 **Date:** 2026-08-04
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved; implementation plan written
 
 ## Objective
 
