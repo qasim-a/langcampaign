@@ -73,6 +73,7 @@ from .storage import (
     save_campaign,
     save_campaign_state,
 )
+from .profile import Profile, ProfileError, load_or_create_profile, resolve_data_root
 
 __all__ = [
     "Campaign",
@@ -102,6 +103,8 @@ __all__ = [
     "MissionOutcome",
     "MissionPriority",
     "PracticeActivity",
+    "Profile",
+    "ProfileError",
     "NextAction",
     "NextActionType",
     "RoadmapPhase",
@@ -120,6 +123,7 @@ __all__ = [
     "forecast_campaign",
     "load_campaign",
     "load_campaign_state",
+    "load_or_create_profile",
     "learner_index_from_dict",
     "learner_index_to_dict",
     "list_campaign_summaries",
@@ -128,6 +132,7 @@ __all__ = [
     "new_campaign",
     "outcome_for_score",
     "render_progress",
+    "resolve_data_root",
     "render_runtime_progress",
     "revise_campaign",
     "run_command",

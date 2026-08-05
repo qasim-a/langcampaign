@@ -1,0 +1,6 @@
+{
+  "name": "langcampaign",
+  "version": "0.1.0",
+  "description": "Goal-driven language learning campaigns for Codex",
+  "skills": "./skills/"
+}
