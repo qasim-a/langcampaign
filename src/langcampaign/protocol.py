@@ -151,6 +151,17 @@ _COMMANDS = {
 
 
 def dispatch(request: ProtocolRequest, learners_root: Path, learner_id: str) -> dict:
+    if request.operation is Operation.CHECK_INSTALL:
+        return {
+            "protocol_version": 1,
+            "operation_id": request.operation_id,
+            "success": True,
+            "data": {
+                "python_compatible": True,
+                "plugin_version": "0.1.0",
+                "profile_ready": True,
+            },
+        }
     if request.operation is Operation.EXPORT:
         from .data_management import DataManagementError, export_profile
         try:

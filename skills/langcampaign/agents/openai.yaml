@@ -1,0 +1,6 @@
+interface:
+  display_name: "LangCampaign"
+  short_description: "Goal-driven language learning campaigns"
+  default_prompt: "Use $langcampaign to start or continue my language campaign."
+policy:
+  allow_implicit_invocation: true

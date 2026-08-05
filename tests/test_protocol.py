@@ -115,3 +115,26 @@ def test_protocol_export_and_reset_use_safe_data_management(tmp_path):
     assert __import__("pathlib").Path(exported["data"]["archive_path"]).exists()
     assert reset["success"] is True
     assert __import__("pathlib").Path(reset["data"]["backup_path"]).exists()
+
+
+def test_check_install_operation_reports_ready_profile(tmp_path):
+    from langcampaign.profile import load_or_create_profile
+
+    root = tmp_path / "data"
+    profile = load_or_create_profile(root)
+    response = dispatch(
+        ProtocolRequest(1, Operation.CHECK_INSTALL, None, {}),
+        root / "learners",
+        profile.learner_id,
+    )
+
+    assert response == {
+        "protocol_version": 1,
+        "operation_id": None,
+        "success": True,
+        "data": {
+            "python_compatible": True,
+            "plugin_version": "0.1.0",
+            "profile_ready": True,
+        },
+    }

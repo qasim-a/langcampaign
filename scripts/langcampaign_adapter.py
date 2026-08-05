@@ -80,15 +80,24 @@ def run_protocol(script_file: Path | None = None) -> int:
         for name in tuple(sys.modules):
             if name == "langcampaign" or name.startswith("langcampaign."):
                 del sys.modules[name]
-        from langcampaign.profile import load_or_create_profile, resolve_data_root
-        from langcampaign.protocol import decode_request, dispatch, encode_response, failure_response, ProtocolError
+        from langcampaign.profile import ProfileError, load_or_create_profile, resolve_data_root
+        from langcampaign.protocol import decode_request, dispatch, encode_response, failure_response, ProtocolError, ProtocolErrorCode
         from langcampaign.receipts import execute_idempotent
 
         request = decode_request(sys.stdin.buffer.read(1024 * 1024 + 1))
         operation_id = request.operation_id
         override = os.environ.get("LANGCAMPAIGN_DATA_ROOT")
         data_root = Path(override) if override else resolve_data_root()
-        profile = load_or_create_profile(data_root)
+        try:
+            profile = load_or_create_profile(data_root)
+        except (OSError, ProfileError):
+            error = ProtocolError(
+                ProtocolErrorCode.PERSISTENCE_FAILURE,
+                "LangCampaign personal storage is unavailable",
+                retryable=True,
+            )
+            sys.stdout.buffer.write(encode_response(failure_response(error, operation_id)))
+            return 4
         if request.mutation:
             response = execute_idempotent(
                 data_root,
