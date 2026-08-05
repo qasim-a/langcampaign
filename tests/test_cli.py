@@ -49,6 +49,20 @@ def test_setup_with_stable_campaign_id_reconciles_timeout_replay(tmp_path):
     assert len(list(tmp_path.glob("qasim-ali/*/state.json"))) == 1
 
 
+def test_setup_can_atomically_persist_first_mission_session(tmp_path):
+    payload = setup_payload()
+    payload["campaign"]["id"] = "atomic-first-mission"
+    payload["first_content"] = mission_content_payload()
+
+    result = run_command("setup", payload, tmp_path)
+    stored = select_campaign(tmp_path, "Qasim Ali", "atomic-first-mission")
+
+    assert result.success is True
+    assert stored.revision == 0
+    assert stored.active_session.mission_id == "delayed-arrival"
+    assert stored.active_session.checkpoint.value == "teaching"
+
+
 def test_setup_silently_applies_defaults_and_stores_prior_knowledge(tmp_path):
     payload = setup_payload()
 

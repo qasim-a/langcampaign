@@ -191,7 +191,16 @@ def start_mission(root, learner_id, campaign_id, expected_revision: int, mission
                 raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "mission is not the next eligible mission")
         prior = [item.attempt_number for item in state.mission_attempts if item.mission_id == mission_id]
         return replace(state, active_session=ActiveMissionSession(mission_id, max(prior, default=0) + 1, kind, MissionCheckpoint.TEACHING, DifficultyAdjustment.STANDARD, content))
-    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
+    def duplicate(state):
+        session = state.active_session
+        return (
+            state.revision == expected_revision + 1
+            and session is not None
+            and session.mission_id == mission_id
+            and session.checkpoint is MissionCheckpoint.TEACHING
+            and session.content == content
+        )
+    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform, idempotent_if=duplicate))
 
 
 def advance_mission(root, learner_id, campaign_id, expected_revision: int, mission_id: str, attempt_number: int, replacement_content: MissionContent | None = None) -> RuntimeSnapshot:
@@ -221,7 +230,21 @@ def advance_mission(root, learner_id, campaign_id, expected_revision: int, missi
         if session.checkpoint is MissionCheckpoint.ASSESSED and session.next_action and session.next_action.mission_id is None:
             return replace(state, active_session=None)
         raise MissionRuntimeError(RuntimeErrorCode.INVALID_TRANSITION, "checkpoint cannot advance")
-    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
+    def duplicate(state):
+        session = state.active_session
+        if state.revision != expected_revision + 1 or session is None:
+            return False
+        if session.mission_id != mission_id or session.attempt_number != attempt_number:
+            return False
+        if session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE:
+            return replacement_content is None
+        if session.checkpoint is MissionCheckpoint.CHECK_READY:
+            return (
+                not session.content_refresh_required
+                and (replacement_content is None or session.content == replacement_content)
+            )
+        return False
+    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform, idempotent_if=duplicate))
 
 
 def adjust_difficulty(root, learner_id, campaign_id, expected_revision: int, mission_id: str, attempt_number: int, adjustment: DifficultyAdjustment) -> RuntimeSnapshot:
@@ -241,7 +264,17 @@ def adjust_difficulty(root, learner_id, campaign_id, expected_revision: int, mis
                 content_refresh_required=True,
             ),
         )
-    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform))
+    def duplicate(state):
+        session = state.active_session
+        return (
+            state.revision == expected_revision + 1
+            and session is not None
+            and session.mission_id == mission_id
+            and session.attempt_number == attempt_number
+            and session.adjustment is adjustment
+            and session.content_refresh_required
+        )
+    return _snapshot(_mutate(root, learner_id, campaign_id, expected_revision, transform, idempotent_if=duplicate))
 
 
 def return_to_practice(
@@ -256,7 +289,8 @@ def return_to_practice(
     def duplicate(state):
         session = _expected_session(state, mission_id, attempt_number)
         return (
-            session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
+            state.revision == expected_revision + 1
+            and session.checkpoint is MissionCheckpoint.GUIDED_PRACTICE
             and session.content_refresh_required
         )
 
@@ -311,7 +345,7 @@ def submit_assessment(root, learner_id, campaign_id, expected_revision: int, mis
         for item in state.mission_attempts:
             if (item.mission_id, item.attempt_number) == (mission_id, attempt_number):
                 if item.criterion_scores == criterion_scores and item.modality == modality and item.result_statement == result_statement:
-                    return True
+                    return state.revision == expected_revision + 1
                 raise MissionRuntimeError(RuntimeErrorCode.DUPLICATE_CONFLICT, "assessment differs from stored attempt")
         return False
     def transform(state):

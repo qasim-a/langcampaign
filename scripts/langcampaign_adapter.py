@@ -80,7 +80,7 @@ def run_protocol(script_file: Path | None = None) -> int:
         for name in tuple(sys.modules):
             if name == "langcampaign" or name.startswith("langcampaign."):
                 del sys.modules[name]
-        from langcampaign.profile import ProfileError, load_or_create_profile, resolve_data_root
+        from langcampaign.profile import ProfileError, UnsupportedProfileVersionError, load_or_create_profile, resolve_data_root
         from langcampaign.protocol import decode_request, dispatch, encode_response, failure_response, ProtocolError, ProtocolErrorCode
         from langcampaign.receipts import execute_idempotent
 
@@ -90,6 +90,13 @@ def run_protocol(script_file: Path | None = None) -> int:
         data_root = Path(override) if override else resolve_data_root()
         try:
             profile = load_or_create_profile(data_root)
+        except UnsupportedProfileVersionError as profile_error:
+            error = ProtocolError(
+                ProtocolErrorCode.UNSUPPORTED_SCHEMA,
+                str(profile_error),
+            )
+            sys.stdout.buffer.write(encode_response(failure_response(error, operation_id)))
+            return 2
         except (OSError, ProfileError):
             error = ProtocolError(
                 ProtocolErrorCode.PERSISTENCE_FAILURE,

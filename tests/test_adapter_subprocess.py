@@ -121,6 +121,28 @@ def test_adapter_invalid_json_uses_typed_error_and_exit_two(tmp_path):
     }
 
 
+def test_adapter_reports_newer_profile_as_unsupported_schema(tmp_path):
+    plugin = _copy_plugin(tmp_path / "plugin")
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / "profile.json").write_text(json.dumps({
+        "profile_version": 2,
+        "learner_id": "ab" * 16,
+        "created_at": "2026-08-04T15:30:00Z",
+    }))
+    environment = os.environ.copy()
+    environment["LANGCAMPAIGN_DATA_ROOT"] = str(data_root)
+    request = {"protocol_version": 1, "operation": "list-campaigns", "operation_id": None, "input": {}}
+
+    result = subprocess.run(
+        [sys.executable, str(plugin / "scripts/langcampaign_adapter.py")],
+        input=json.dumps(request), env=environment, text=True, capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["error"]["code"] == "UNSUPPORTED_SCHEMA"
+
+
 def test_adapter_reports_unwritable_personal_storage_as_retryable_persistence_error(tmp_path):
     plugin = _copy_plugin(tmp_path / "plugin")
     blocked = tmp_path / "not-a-directory"

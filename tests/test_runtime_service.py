@@ -41,6 +41,20 @@ def test_runtime_service_persists_checkpoint_assessment_and_read_only_status(tmp
     assert assessed.revision == 4
 
 
+def test_runtime_mutations_reconcile_domain_commit_before_receipt_replay(tmp_path):
+    create_and_activate_campaign(tmp_path, _state())
+    started = start_mission(tmp_path, "qasim", "campaign-a", 0, "delayed-arrival", _content())
+    started_replay = start_mission(tmp_path, "qasim", "campaign-a", 0, "delayed-arrival", _content())
+    guided = advance_mission(tmp_path, "qasim", "campaign-a", 1, "delayed-arrival", 1)
+    guided_replay = advance_mission(tmp_path, "qasim", "campaign-a", 1, "delayed-arrival", 1)
+    adjusted = adjust_difficulty(tmp_path, "qasim", "campaign-a", 2, "delayed-arrival", 1, DifficultyAdjustment.HARDER)
+    adjusted_replay = adjust_difficulty(tmp_path, "qasim", "campaign-a", 2, "delayed-arrival", 1, DifficultyAdjustment.HARDER)
+
+    assert started_replay.revision == started.revision == 1
+    assert guided_replay.revision == guided.revision == 2
+    assert adjusted_replay.revision == adjusted.revision == 3
+
+
 def test_difficulty_at_check_ready_requires_replacement_content(tmp_path):
     create_and_activate_campaign(tmp_path, _state())
     started = start_mission(tmp_path, "qasim", "campaign-a", 0, "delayed-arrival", _content())

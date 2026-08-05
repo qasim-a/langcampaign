@@ -100,15 +100,19 @@ def replay_or_conflict(
     root.mkdir(parents=True, mode=0o700, exist_ok=True)
     digest = canonical_input_digest(operation, input_data)
     with profile_lock(root):
-        for item in _load_unlocked(root):
-            if item["operation_id"] != operation_id:
-                continue
-            if item["operation"] != operation or item["input_sha256"] != digest:
-                raise ProtocolError(
-                    ProtocolErrorCode.IDEMPOTENCY_CONFLICT,
-                    "operation_id was already used with different input",
-                )
-            return item["response"]
+        return _replay_unlocked(root, operation_id, operation, digest)
+
+
+def _replay_unlocked(root, operation_id, operation, digest):
+    for item in _load_unlocked(root):
+        if item["operation_id"] != operation_id:
+            continue
+        if item["operation"] != operation or item["input_sha256"] != digest:
+            raise ProtocolError(
+                ProtocolErrorCode.IDEMPOTENCY_CONFLICT,
+                "operation_id was already used with different input",
+            )
+        return item["response"]
     return None
 
 
@@ -123,22 +127,26 @@ def record_receipt(
     root.mkdir(parents=True, mode=0o700, exist_ok=True)
     digest = canonical_input_digest(operation, input_data)
     with profile_lock(root):
-        completed = _load_unlocked(root)
-        for item in completed:
-            if item["operation_id"] == operation_id:
-                if item["operation"] != operation or item["input_sha256"] != digest:
-                    raise ProtocolError(
-                        ProtocolErrorCode.IDEMPOTENCY_CONFLICT,
-                        "operation_id was already used with different input",
-                    )
-                return
-        completed.append({
+        _record_unlocked(root, operation_id, operation, digest, response)
+
+
+def _record_unlocked(root, operation_id, operation, digest, response):
+    completed = _load_unlocked(root)
+    for item in completed:
+        if item["operation_id"] == operation_id:
+            if item["operation"] != operation or item["input_sha256"] != digest:
+                raise ProtocolError(
+                    ProtocolErrorCode.IDEMPOTENCY_CONFLICT,
+                    "operation_id was already used with different input",
+                )
+            return
+    completed.append({
             "operation_id": operation_id,
             "operation": operation,
             "input_sha256": digest,
             "response": response,
-        })
-        _save_unlocked(root, completed[-MAX_RECEIPTS:])
+    })
+    _save_unlocked(root, completed[-MAX_RECEIPTS:])
 
 
 def execute_idempotent(
@@ -148,9 +156,13 @@ def execute_idempotent(
     input_data: dict[str, Any],
     action: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
-    replay = replay_or_conflict(root, operation_id, operation, input_data)
-    if replay is not None:
-        return replay
-    response = action()
-    record_receipt(root, operation_id, operation, input_data, response)
-    return response
+    root = Path(root)
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    digest = canonical_input_digest(operation, input_data)
+    with profile_lock(root):
+        replay = _replay_unlocked(root, operation_id, operation, digest)
+        if replay is not None:
+            return replay
+        response = action()
+        _record_unlocked(root, operation_id, operation, digest, response)
+        return response

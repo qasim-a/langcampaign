@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,10 @@ from .profile import Profile, load_or_create_profile, profile_lock
 
 
 class DataManagementError(ValueError):
+    pass
+
+
+class UnsupportedSchemaError(DataManagementError):
     pass
 
 
@@ -73,15 +78,15 @@ def _snapshot_files(root: Path) -> dict[str, bytes]:
     return files
 
 
-def export_profile(root: Path, destination_directory: Path, *, now=None) -> ExportResult:
+def export_profile(root: Path, destination_directory: Path, *, now=None, archive_name=None, lock=True) -> ExportResult:
     root, destination = Path(root), Path(destination_directory)
     if destination.is_symlink() or not destination.is_dir():
         raise DataManagementError("export destination must be an existing regular directory")
     when, stamp = _timestamp(now)
-    final = destination / f"langcampaign-export-{stamp}.zip"
+    final = destination / (archive_name or f"langcampaign-export-{stamp}.zip")
     if final.exists() or final.is_symlink():
         raise DataManagementError("export archive already exists")
-    with profile_lock(root):
+    with (profile_lock(root) if lock else nullcontext()):
         files = _snapshot_files(root)
         checksums = {name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())}
         manifest = {
@@ -89,6 +94,11 @@ def export_profile(root: Path, destination_directory: Path, *, now=None) -> Expo
             "created_at": when.isoformat().replace("+00:00", "Z"),
             "plugin_version": "0.1.0",
             "files": checksums,
+            "schema_versions": {
+                name: json.loads(content)["schema_version"]
+                for name, content in files.items()
+                if name.endswith("/state.json")
+            },
         }
         descriptor, temporary_name = tempfile.mkstemp(prefix=".langcampaign-export.", suffix=".tmp", dir=destination)
         os.close(descriptor)
@@ -103,18 +113,24 @@ def export_profile(root: Path, destination_directory: Path, *, now=None) -> Expo
             os.replace(temporary, final)
             if os.name == "posix":
                 final.chmod(0o600)
+            with zipfile.ZipFile(final) as verification:
+                for name, checksum in checksums.items():
+                    if hashlib.sha256(verification.read(name)).hexdigest() != checksum:
+                        raise DataManagementError("export checksum verification failed")
         finally:
             if temporary.exists():
                 temporary.unlink()
     return ExportResult(final, manifest)
 
 
-def backup_before_upgrade(root: Path, *, now=None) -> ExportResult:
+def backup_before_upgrade(root: Path, *, now=None, archive_name=None, lock=True) -> ExportResult:
     backups = Path(root) / "backups"
     backups.mkdir(parents=True, mode=0o700, exist_ok=True)
-    result = export_profile(root, backups, now=now)
-    for stale in sorted(backups.glob("langcampaign-export-*.zip"))[:-3]:
-        stale.unlink()
+    result = export_profile(root, backups, now=now, archive_name=archive_name, lock=lock)
+    for prefix in ("langcampaign-export-", "upgrade-"):
+        candidates = sorted(backups.glob(f"{prefix}*.zip"), key=lambda path: path.stat().st_mtime_ns)
+        for stale in candidates[:-3]:
+            stale.unlink()
     return result
 
 
@@ -146,23 +162,57 @@ def inspect_schema_versions(root: Path, learner_id: str) -> SchemaInventory:
     return SchemaInventory(profile["profile_version"], campaign_versions)
 
 
-def reset_profile(root: Path, confirmation: str, *, now=None, token_hex=None) -> ResetResult:
+def prepare_write(root: Path, learner_id: str, operation_id: str, *, lock=True):
+    root = Path(root)
+    with (profile_lock(root) if lock else nullcontext()):
+        inventory = inspect_schema_versions(root, learner_id)
+        versions = (inventory.profile_version, *inventory.campaign_versions.values())
+        if inventory.profile_version > 1 or any(value > 5 for value in inventory.campaign_versions.values()):
+            raise UnsupportedSchemaError("stored schema is newer than this plugin supports")
+        if inventory.profile_version < 1 or any(value < 5 for value in inventory.campaign_versions.values()):
+            name = f"upgrade-{operation_id}.zip"
+            existing = root / "backups" / name
+            if existing.exists():
+                return ExportResult(existing, {})
+            return backup_before_upgrade(root, archive_name=name, lock=False)
+    return None
+
+
+def reset_profile(root: Path, confirmation: str, *, now=None, token_hex=None, operation_id=None, lock=True) -> ResetResult:
     if confirmation != "RESET LANGCAMPAIGN":
         raise DataManagementError("exact reset confirmation is required")
     root = Path(root)
     when, stamp = _timestamp(now)
-    backup = backup_before_upgrade(root, now=lambda: when)
-    recovery = root / "recovery" / f"reset-{stamp}"
-    if recovery.exists() or recovery.is_symlink():
-        raise DataManagementError("reset recovery directory already exists")
-    with profile_lock(root):
-        recovery.mkdir(parents=True, mode=0o700)
-        for name in ("profile.json", "receipts.json", "learners"):
-            source = root / name
-            if source.is_symlink():
-                raise DataManagementError(f"managed entry is a symlink: {name}")
-            if source.exists():
-                shutil.move(str(source), str(recovery / name))
-        (root / "learners").mkdir(mode=0o700)
-    profile = load_or_create_profile(root, now=lambda: when, token_hex=token_hex)
+    suffix = operation_id or stamp
+    recovery = root / "recovery" / f"reset-{suffix}"
+    with (profile_lock(root) if lock else nullcontext()):
+        backup = backup_before_upgrade(
+            root,
+            now=lambda: when,
+            archive_name=f"reset-{suffix}.zip",
+            lock=False,
+        ) if not (root / "backups" / f"reset-{suffix}.zip").exists() else ExportResult(
+            root / "backups" / f"reset-{suffix}.zip", {}
+        )
+        if recovery.is_symlink():
+            raise DataManagementError("reset recovery directory is unsafe")
+        recovery.mkdir(parents=True, mode=0o700, exist_ok=True)
+        published = recovery / ".reset-published"
+        if not published.exists():
+            for name in ("profile.json", "receipts.json", "learners"):
+                source = root / name
+                if source.is_symlink():
+                    raise DataManagementError(f"managed entry is a symlink: {name}")
+                if source.exists():
+                    target = recovery / name
+                    if target.exists():
+                        raise DataManagementError("reset recovery conflicts with live data")
+                    shutil.move(str(source), str(target))
+            descriptor = os.open(published, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        (root / "learners").mkdir(mode=0o700, exist_ok=True)
+        profile = load_or_create_profile(root, now=lambda: when, token_hex=token_hex, lock=False)
     return ResetResult(profile, backup.archive_path, recovery)

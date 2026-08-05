@@ -1,4 +1,6 @@
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
@@ -85,3 +87,25 @@ def test_execute_idempotent_does_not_receipt_failed_mutation(tmp_path):
         )
 
     assert replay_or_conflict(tmp_path, operation_id, "pause", {}) is None
+
+
+def test_execute_idempotent_serializes_concurrent_identical_requests(tmp_path):
+    operation_id = str(uuid4())
+    started_together = Barrier(2)
+    calls = []
+
+    def request():
+        started_together.wait()
+
+        def action():
+            calls.append("called")
+            __import__("time").sleep(0.05)
+            return {"success": True, "data": {"revision": 1}}
+
+        return execute_idempotent(tmp_path, operation_id, "pause", {"x": 1}, action)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _: request(), range(2)))
+
+    assert results[0] == results[1]
+    assert calls == ["called"]

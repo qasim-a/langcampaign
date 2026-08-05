@@ -41,7 +41,7 @@ from .storage import (
     roadmap_from_dict,
     mission_content_from_dict,
 )
-from .runtime import CriterionScore, DifficultyAdjustment
+from .runtime import ActiveMissionSession, AttemptKind, CriterionScore, DifficultyAdjustment, MissionCheckpoint
 from .runtime_service import (
     ContentIssue, MissionRuntimeError, RuntimeErrorCode, adjust_difficulty, advance_mission,
     mission_status, start_mission, submit_assessment, validate_mission_content,
@@ -233,13 +233,34 @@ def _state_from_setup_payload(payload: dict) -> CampaignState:
         else ""
     )
     try:
-        return CampaignState(
+        state = CampaignState(
             campaign=campaign,
             learner_id=learner_id,
             mission_plans=mission_plans,
             roadmap=roadmap,
             prior_knowledge=prior_knowledge,
         )
+        if "first_content" in payload:
+            content = _runtime_content_from_input(payload["first_content"])
+            priority_ids = next_priority_ids(roadmap, mission_plans)
+            if not priority_ids:
+                raise CommandInputError("active roadmap phase has no missions")
+            first_id = priority_ids[0]
+            capability = next(item.capability for item in mission_plans if item.id == first_id)
+            if content.capability != capability:
+                raise CommandInputError("first content capability does not match first mission")
+            state = replace(
+                state,
+                active_session=ActiveMissionSession(
+                    first_id,
+                    1,
+                    AttemptKind.INITIAL,
+                    MissionCheckpoint.TEACHING,
+                    DifficultyAdjustment.STANDARD,
+                    content,
+                ),
+            )
+        return state
     except ValueError as error:
         raise _input_error(error) from error
 
@@ -409,6 +430,11 @@ def _transition_campaign(payload: dict, learners_root: Path) -> dict:
             raise CommandInputError(
                 "source_campaign_id is not the active campaign"
             )
+        if "source_expected_revision" in payload and active.revision != _integer(
+            payload["source_expected_revision"], "source_expected_revision"
+        ):
+            from .learners import CampaignRevisionConflict
+            raise CampaignRevisionConflict(active)
         persisted = transition_campaign(
             learners_root, new_state.learner_id, new_state, transfers
         )
@@ -421,7 +447,13 @@ def _resume_campaign(payload: dict, learners_root: Path) -> dict:
     learner_id = _string(_field(payload, "learner_id"), "learner_id")
     campaign_id = _string(_field(payload, "campaign_id"), "campaign_id")
     try:
-        active = activate_campaign(learners_root, learner_id, campaign_id)
+        active = activate_campaign(
+            learners_root,
+            learner_id,
+            campaign_id,
+            _integer(payload["expected_revision"], "expected_revision")
+            if "expected_revision" in payload else None,
+        )
     except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
     return {"active_campaign_id": active.campaign.id}
@@ -431,7 +463,13 @@ def _complete_campaign(payload: dict, learners_root: Path) -> dict:
     learner_id = _string(_field(payload, "learner_id"), "learner_id")
     campaign_id = _string(_field(payload, "campaign_id"), "campaign_id")
     try:
-        completed = complete_campaign(learners_root, learner_id, campaign_id)
+        completed = complete_campaign(
+            learners_root,
+            learner_id,
+            campaign_id,
+            _integer(payload["expected_revision"], "expected_revision")
+            if "expected_revision" in payload else None,
+        )
     except (LearnerRepositoryError, CampaignStorageError) as error:
         raise _input_error(error) from error
     return {"completed_campaign_id": completed.campaign.id}

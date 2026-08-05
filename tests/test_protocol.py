@@ -40,6 +40,36 @@ def test_protocol_requires_uuid_for_mutation_and_rejects_unknown_fields():
     assert extra.value.code is ProtocolErrorCode.INVALID_REQUEST
 
 
+def test_protocol_rejects_unknown_operation_input_and_unstable_setup():
+    with pytest.raises(ProtocolError) as unknown:
+        decode_request(
+            b'{"protocol_version":1,"operation":"pause","operation_id":"8d626be1-4a80-4426-b06e-d17fb3f9bb19","input":{"campaign_id":"c","expected_revision":0,"extra":1}}'
+        )
+    assert unknown.value.code is ProtocolErrorCode.INVALID_REQUEST
+
+    with pytest.raises(ProtocolError, match="campaign.id"):
+        decode_request(
+            b'{"protocol_version":1,"operation":"setup","operation_id":"8d626be1-4a80-4426-b06e-d17fb3f9bb19","input":{"campaign":{},"mission_plans":[],"roadmap":{},"prior_knowledge":"","first_content":{}}}'
+        )
+
+
+def test_protocol_rejects_unknown_nested_setup_fields():
+    from tests.fixtures import mission_content_payload, setup_payload
+    payload = setup_payload()
+    payload.pop("learner_id")
+    payload["campaign"]["id"] = "campaign-a"
+    payload["first_content"] = mission_content_payload()
+    payload["roadmap"]["phases"][0]["ignored"] = True
+    raw = json.dumps({
+        "protocol_version": 1, "operation": "setup",
+        "operation_id": "8d626be1-4a80-4426-b06e-d17fb3f9bb19",
+        "input": payload,
+    }).encode()
+
+    with pytest.raises(ProtocolError, match="roadmap phases"):
+        decode_request(raw)
+
+
 def test_protocol_rejects_unsupported_version_and_oversized_input():
     with pytest.raises(ProtocolError) as version:
         decode_request(

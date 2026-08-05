@@ -559,13 +559,15 @@ def select_campaign_lifecycle(
         return selected, lifecycle
 
 
-def activate_campaign(root: Path, learner_id: str, campaign_id: str) -> CampaignState:
+def activate_campaign(root: Path, learner_id: str, campaign_id: str, expected_revision: int | None = None) -> CampaignState:
     campaign_id = _safe_id(campaign_id, "campaign_id")
     with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
         states, index = _read_lifecycle_at(learner_fd, canonical)
         selected = next((state for state in states if state.campaign.id == campaign_id), None)
         if selected is None:
             raise CampaignSelectionError("campaign does not exist")
+        if expected_revision is not None and selected.revision != expected_revision:
+            raise CampaignRevisionConflict(selected)
         resolved = _legacy_index_for(states, index)
         if campaign_id in resolved.completed_campaign_ids:
             raise CampaignSelectionError("completed campaigns cannot be activated")
@@ -577,13 +579,15 @@ def activate_campaign(root: Path, learner_id: str, campaign_id: str) -> Campaign
         return selected
 
 
-def complete_campaign(root: Path, learner_id: str, campaign_id: str) -> CampaignState:
+def complete_campaign(root: Path, learner_id: str, campaign_id: str, expected_revision: int | None = None) -> CampaignState:
     campaign_id = _safe_id(campaign_id, "campaign_id")
     with _locked_learner(root, learner_id, create=False) as (learner_fd, canonical):
         states, index = _read_lifecycle_at(learner_fd, canonical)
         selected = next((state for state in states if state.campaign.id == campaign_id), None)
         if selected is None:
             raise CampaignSelectionError("campaign does not exist")
+        if expected_revision is not None and selected.revision != expected_revision:
+            raise CampaignRevisionConflict(selected)
         resolved = _legacy_index_for(states, index)
         completed = tuple(
             dict.fromkeys((*resolved.completed_campaign_ids, campaign_id))
@@ -621,7 +625,9 @@ def pause_campaign(
         if lifecycle is CampaignLifecycle.COMPLETED:
             raise CampaignCompletedError("campaign is completed")
         if lifecycle is CampaignLifecycle.PAUSED:
-            return selected
+            if selected.revision == expected_revision + 1:
+                return selected
+            raise CampaignRevisionConflict(selected)
         if selected.revision != expected_revision:
             raise CampaignRevisionConflict(selected)
         campaign_fd = _open_directory(learner_fd, campaign_id)

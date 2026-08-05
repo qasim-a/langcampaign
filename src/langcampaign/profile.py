@@ -9,7 +9,7 @@ import secrets
 import sys
 import tempfile
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +24,10 @@ _LOCAL_LOCKS_GUARD = threading.Lock()
 
 class ProfileError(ValueError):
     """The personal profile cannot be selected or safely loaded."""
+
+
+class UnsupportedProfileVersionError(ProfileError):
+    """The profile was written by a newer LangCampaign version."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,8 @@ def _profile_from_bytes(raw: bytes) -> Profile:
         raise ProfileError("profile is not valid UTF-8 JSON") from error
     if not isinstance(data, dict) or set(data) != _PROFILE_FIELDS:
         raise ProfileError("profile fields are invalid")
+    if type(data["profile_version"]) is int and data["profile_version"] > PROFILE_VERSION:
+        raise UnsupportedProfileVersionError("stored profile schema is newer than this plugin supports")
     return Profile(data["profile_version"], data["learner_id"], _parse_time(data["created_at"]))
 
 
@@ -109,7 +115,17 @@ def profile_lock(root: Path) -> Iterator[None]:
             try:
                 import fcntl
             except ImportError:
-                yield
+                import msvcrt
+
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b"\0")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(descriptor, fcntl.LOCK_EX)
                 try:
@@ -172,11 +188,12 @@ def load_or_create_profile(
     *,
     now: Callable[[], datetime] | None = None,
     token_hex: Callable[[int], str] | None = None,
+    lock: bool = True,
 ) -> Profile:
     root = Path(root)
     _prepare_root(root)
     path = root / "profile.json"
-    with profile_lock(root):
+    with (profile_lock(root) if lock else nullcontext()):
         if path.exists() or path.is_symlink():
             return _load_profile(path)
         clock = now or (lambda: datetime.now(timezone.utc))
